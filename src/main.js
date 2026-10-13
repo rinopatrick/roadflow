@@ -10,6 +10,7 @@ import { Renderer } from './render.js';
 import { toast, openInspect, closeInspect, inspectOpen } from './ui.js';
 import { saveGame, loadGame, hasSave, exportGame } from './save.js';
 import { sfx, setAudioEnabled } from './audio.js';
+import { cityCongestion, formatCongestion } from './metrics.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -20,9 +21,11 @@ let ids = createIdSource();   // world-owned ID source (deterministic, collision
 let speed = 1;
 let tool = 'road';
 let draft = [];            // road draft control points
-let simTime = 0;
 let selected = null;
 let lastHud = 0;
+// NOTE: deliberately no separate `simTime` here. `traffic.time` is the single
+// simulation clock (CONTRACTS.md section 2). A second counter is what allowed
+// the renderer to display a phase the simulator was not obeying (EVIDENCE E04).
 
 function newGame(seed = (() => {
   const p = new URLSearchParams(location.search).get('seed');
@@ -37,7 +40,7 @@ function newGame(seed = (() => {
   eco = new Economy(net, terrain, seed);
   eco.onLevelUp = (lvl) => { toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn'); sfx.levelUp(); };
   eco.onToast = (m, k) => toast(m, k);
-  simTime = 0;
+  traffic.time = 0;
   selected = null;
   clock.reset();
   closeInspect();
@@ -67,7 +70,6 @@ function loadFromSave() {
   eco = data.eco; // already deserialized by loadGame()
   eco.onLevelUp = (lvl) => { toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn'); sfx.levelUp(); };
   eco.onToast = (m, k) => toast(m, k);
-  simTime = data.simTime;
   if (data.camera) renderer.cam = { ...renderer.cam, ...data.camera };
   selected = null;
   clock.reset();
@@ -435,10 +437,10 @@ function updateHud(force) {
   document.getElementById('hTrips').textContent = eco.totalTrips;
   const avg = traffic.stats.trips ? (traffic.stats.totalTripTime / traffic.stats.trips) : 0;
   document.getElementById('hAvg').textContent = traffic.stats.trips ? avg.toFixed(0) + 's' : '—';
-  // congestion: weighted avg
-  let sum = 0, w = 0;
-  for (const e of net.edges.values()) { const c = e._congestion || 0; sum += c; w++; }
-  document.getElementById('hCong').textContent = w ? Math.round(sum / w * 100 / 0.6) + '%' : '0%';
+  // Congestion is the share of present vehicles that are stopped, so it is
+  // displayed directly. The previous HUD divided by 0.6 to compensate for a
+  // broken EMA (EVIDENCE E03); that fudge is gone.
+  document.getElementById('hCong').textContent = formatCongestion(cityCongestion(net));
 }
 
 function updateBatchUI() {
@@ -489,7 +491,6 @@ function loop(now) {
 
   const ticks = clock.advance(Math.max(0, wallSeconds), speed);
   if (ticks > 0) {
-    simTime = traffic.time;
     updateBatchUI();
   }
 
@@ -499,7 +500,7 @@ function loop(now) {
     mouseWorld,
     mouseScreen,
     tool,
-    simTime,
+    simTime: traffic.time,
     selected,
   });
   updateHud();

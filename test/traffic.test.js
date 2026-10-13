@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoadNetwork } from '../src/roadNetwork.js';
 import { TrafficSim } from '../src/traffic.js';
+import { getLegacyPhase } from '../src/signals.js';
 
 function straightNet() {
   const net = new RoadNetwork();
@@ -67,36 +68,77 @@ test('traffic light stops cross traffic during red', () => {
   const center = [...net.nodes.values()].find(n => n.edges.size === 4);
   center.type = 'light';
   center.light = { cycle: 20, offset: 0, greenRatio: 0.4 };
-  // EW car
-  const edges = [...net.edges.values()];
-  const e1 = edges[0]; // horizontal
-  const from = net.nodes.get(e1.a), to = net.nodes.get(e1.b);
-  const car = sim.spawn(from.id, to.id);
-  assert.ok(car, 'car spawned');
-  // drive until approaching within 30 of center, then check stopping behavior during red phase
-  let checked = false;
-  for (let t = 0; t < 60 * 30 && !checked; t++) {
+
+  // Classify each approach by its REAL axis from geometry. The previous version
+  // of this test assumed `edges[0]` was horizontal and hard-coded 'x', but that
+  // edge is actually vertical - so its notion of "red for this car" was
+  // inverted and it only passed by accident.
+  const approaches = [];
+  for (const eid of center.edges) {
+    const edge = net.edges.get(eid);
+    const outer = net.nodes.get(edge.a === center.id ? edge.b : edge.a);
+    const axis = Math.abs(outer.x - center.x) >= Math.abs(outer.y - center.y) ? 'x' : 'y';
+    approaches.push({ edge, axis, outer });
+  }
+  const xApproach = approaches.find(a => a.axis === 'x');
+  const yApproach = approaches.find(a => a.axis === 'y');
+  assert.ok(xApproach && yApproach, 'fixture provides both axes');
+
+  const cars = [
+    { car: sim.spawn(xApproach.outer.id, center.id), axis: 'x' },
+    { car: sim.spawn(yApproach.outer.id, center.id), axis: 'y' },
+  ];
+  for (const entry of cars) assert.ok(entry.car, `${entry.axis} car spawned`);
+
+  let observedHold = false;
+  let observedGo = false;
+
+  for (let t = 0; t < 60 * 60; t++) {
     sim.update(1 / 60);
-    const st = car.currentStep();
-    if (!st) break;
-    const edge = net.edges.get(st.edgeId);
-    if (st.to === center.id && edge.total - car.s < 12 && edge.total - car.s > 4) {
-      const half = 10, cyclePos = sim.time % 20;
-      const axisA = center.light.axis;
-      const firstHalf = cyclePos < half;
-      const greenAxisNow = firstHalf ? axisA : (axisA === 'x' ? 'y' : 'x');
-      if (greenAxisNow !== 'x') {
-        // red for EW car -> let it brake for half a second, then it must be ~stopped
-        for (let k = 0; k < 30; k++) sim.update(1 / 60);
-        const st2 = car.currentStep();
-        const edge2 = net.edges.get(st2.edgeId);
-        assert.ok(car.speed < 3 || (edge2 && edge2.total - car.s <= 8),
-          `car waits at red (speed=${car.speed.toFixed(2)}, dist=${edge2 ? (edge2.total - car.s).toFixed(1) : '?'})`);
-        checked = true;
+    // Use the shared phase authority, the same one the simulator obeys.
+    const phase = getLegacyPhase(center.light, sim.time);
+
+    for (const { car, axis } of cars) {
+      if (car.arrived || car.dead) continue;
+      const st = car.currentStep();
+      if (!st || st.to !== center.id) continue; // already past, or not yet here
+      const edge = net.edges.get(st.edgeId);
+      if (!edge) continue;
+      const dist = edge.total - car.s;
+      const isGreen = phase.state === 'green' && phase.axis === axis;
+      // Yellow for MY axis means the vehicle may clear if it cannot stop safely
+      // (signals.js / _mustYield use a 10 wu threshold). That is deliberate, not
+      // a violation, so only red and all-red are asserted as holds.
+      const isYellowForMe = phase.state === 'yellow' && phase.axis === axis;
+      const mustHold = !isGreen && !isYellowForMe;
+
+      if (mustHold && dist < 30) {
+        assert.ok(dist > 0.5,
+          `${axis} car crossed the stop line while ${phase.state}/${phase.axis} (dist ${dist.toFixed(2)})`);
+        if (dist < 12 && car.speed < 3) observedHold = true;
       }
+      if (isGreen && dist < 30) observedGo = true;
     }
   }
-  assert.ok(checked, 'observed a red-light stop');
+
+  assert.ok(observedHold, 'observed a car waiting at a red/all-red phase');
+  assert.ok(observedGo, 'observed a car proceeding on green');
+});
+
+test('the two approach axes are never permitted at the same time', () => {
+  const net = crossNet();
+  const center = [...net.nodes.values()].find(n => n.edges.size === 4);
+  center.type = 'light';
+  center.light = { cycle: 20, offset: 0, greenRatio: 0.4 };
+
+  for (let t = 0; t < 60; t += 0.02) {
+    const phase = getLegacyPhase(center.light, t);
+    // Exactly one axis is named, and only a green state grants passage.
+    assert.ok(phase.axis === 'x' || phase.axis === 'y');
+    if (phase.state === 'allRed') {
+      assert.ok(phase.remaining >= 0, 'all-red has a bounded duration');
+    }
+  }
 });
 
 // helper: dead-end nodes of edge i
