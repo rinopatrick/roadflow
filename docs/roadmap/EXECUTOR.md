@@ -108,6 +108,29 @@ When done, evidence entries should look like:
 
 The sample result is a template, not proof of a passing run. Populate real values; never copy fabricated numbers. Store paths relative to project where possible. Don't put credentials or private unrelated home-directory details in artifacts.
 
+## 5b. Branch policy (industry-standard, enforced by guard-git)
+
+This environment enforces the `guard-git` policy: **direct commits to `main`/`master` are blocked**, and commit subjects must be Conventional Commits. This is deliberate, not a bug. Work with it:
+
+| Branch | Purpose | Lifetime |
+|---|---|---|
+| `main` | Pristine baseline only. Never committed to directly. | permanent |
+| `roadmap/implementation` | Integration trunk for the 48-task roadmap. Receives task merges. | whole roadmap |
+| `task/Sxx.y-<slug>` | One branch per task, cut from the integration trunk. | deleted after merge |
+
+Rules:
+
+1. One task = one branch. Cut it from `roadmap/implementation`, never from `main`.
+2. Commit subject format: `type(scope): subject` (feat, fix, docs, test, refactor, chore, perf, ci, build, style, revert). Subject <=72 chars.
+3. Do not add `Co-authored-by:` footers.
+4. Merge with `--no-ff` so each task leaves a visible merge commit.
+5. Delete the task branch after merge.
+6. Never push. No remote is configured; publication needs separate explicit authorization.
+
+**Harness pitfall:** the guard evaluates HEAD *before* executing the command. So `git checkout -b X && git commit` in a single call is still blocked. Split them into two calls: create/switch the branch first, then commit.
+
+When a batch of tasks is finished and verified, merging the integration trunk into `main` is a separate, explicitly authorized decision. Do not do it as part of a task.
+
 ## 6. Required handoff format
 
 ```text

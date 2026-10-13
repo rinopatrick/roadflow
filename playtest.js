@@ -1,113 +1,107 @@
-// Automated playtest — drives the game in headless Chromium and captures
-// screenshots + console errors. Run: node playtest.js
-import { chromium } from 'playwright';
+// Visual capture tour — drives the game through its main screens and saves
+// screenshots for human review.
+//
+// Run: node playtest.js
+//      RF_RUN_ID=baseline node playtest.js   (named, reproducible artifact dir)
+//
+// Assertions live in test/browser/smoke.js. This script's job is the picture
+// tour, but it still exits nonzero on browser errors so a broken build cannot
+// masquerade as a successful capture run.
+import {
+  startServer, launchGame, runDir, hudState, dismissHelp,
+} from './test/browser/harness.js';
 
-const shots = 'shots';
-import { mkdirSync } from 'node:fs';
-mkdirSync(shots, { recursive: true });
+const shots = runDir(process.env.RF_RUN_ID || `playtest-${Date.now()}`);
+const CX = 640, CY = 450;
 
-const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-const errors = [];
-page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
+const server = await startServer();
+const game = await launchGame({ baseUrl: server.baseUrl });
 
-await page.goto('http://localhost:8080/?seed=1', { waitUntil: 'networkidle' });
-await page.waitForTimeout(1500);
-await page.screenshot({ path: `${shots}/01-boot.png` });
+try {
+  const { page } = game;
 
-// close help
-await page.keyboard.press('Escape');
-await page.waitForTimeout(300);
-await page.screenshot({ path: `${shots}/02-map.png` });
+  await page.screenshot({ path: `${shots}/01-boot.png` });
+  await dismissHelp(page);
+  await page.screenshot({ path: `${shots}/02-map.png` });
 
-// draw a road: click points, then Enter
-const cx = 640, cy = 450;
-await page.mouse.move(cx - 150, cy);
-await page.waitForTimeout(100);
-await page.mouse.click(cx - 150, cy);
-await page.waitForTimeout(150);
-await page.mouse.move(cx + 100, cy - 40);
-await page.waitForTimeout(150);
-await page.screenshot({ path: `${shots}/03-draft1.png` });
-await page.mouse.click(cx + 100, cy - 40);
-await page.waitForTimeout(150);
-await page.mouse.move(cx + 300, cy + 60);
-await page.waitForTimeout(150);
-await page.screenshot({ path: `${shots}/04-draft2.png` });
-await page.mouse.click(cx + 300, cy + 60);
-await page.waitForTimeout(150);
-await page.keyboard.press('Enter');
-await page.waitForTimeout(400);
-await page.screenshot({ path: `${shots}/05-road-built.png` });
+  // Road draft: click points, then Enter to finish.
+  await page.keyboard.press('1');
+  await page.mouse.move(CX - 150, CY);
+  await page.mouse.click(CX - 150, CY);
+  await page.mouse.move(CX + 100, CY - 40);
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${shots}/03-draft1.png` });
+  await page.mouse.click(CX + 100, CY - 40);
+  await page.mouse.move(CX + 300, CY + 60);
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${shots}/04-draft2.png` });
+  await page.mouse.click(CX + 300, CY + 60);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${shots}/05-road-built.png` });
 
-// test roundabout hover preview (tool 4)
-await page.keyboard.press('4');
-await page.mouse.move(cx + 100, cy - 40);
-await page.waitForTimeout(200);
-await page.screenshot({ path: `${shots}/05b-roundabout-hover.png` });
+  // Roundabout hover preview.
+  await page.keyboard.press('4');
+  await page.mouse.move(CX + 100, CY - 40);
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: `${shots}/06-roundabout-hover.png` });
 
-// crossing road to test junction creation
-await page.keyboard.press('1');
-await page.mouse.click(cx - 100, cy + 200);
-await page.mouse.click(cx + 50, cy - 20); // crosses the first road
-await page.keyboard.press('Enter');
-await page.waitForTimeout(400);
-await page.screenshot({ path: `${shots}/06-crossing.png` });
+  // Crossing road, to show automatic junction creation.
+  await page.keyboard.press('1');
+  await page.mouse.click(CX - 100, CY + 200);
+  await page.mouse.click(CX + 50, CY - 20);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${shots}/07-crossing.png` });
 
-// place a house near the road (tool 6)
-await page.keyboard.press('6');
-await page.mouse.move(cx - 100, cy - 80);
-await page.waitForTimeout(150);
-await page.screenshot({ path: `${shots}/06b-house-hover.png` });
-await page.mouse.click(cx - 100, cy - 80);
-await page.waitForTimeout(200);
-await page.screenshot({ path: `${shots}/07-house.png` });
+  // Buildings.
+  await page.keyboard.press('6');
+  await page.mouse.move(CX - 100, CY - 80);
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${shots}/08-house-hover.png` });
+  await page.mouse.click(CX - 100, CY - 80);
+  await page.waitForTimeout(200);
+  await page.keyboard.press('7');
+  await page.mouse.click(CX + 250, CY + 120);
+  await page.waitForTimeout(200);
+  await page.keyboard.press('8');
+  await page.mouse.click(CX - 250, CY + 150);
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: `${shots}/09-buildings.png` });
 
-// place a shop (tool 7)
-await page.keyboard.press('7');
-await page.mouse.click(cx + 250, cy + 120);
-await page.waitForTimeout(200);
+  // Let traffic run, then capture moving vehicles.
+  await page.keyboard.press('1');
+  await page.waitForTimeout(10000);
+  await page.screenshot({ path: `${shots}/10-traffic.png` });
 
-// place a factory (tool 8)
-await page.keyboard.press('8');
-await page.mouse.click(cx - 250, cy + 150);
-await page.waitForTimeout(200);
-await page.screenshot({ path: `${shots}/08-buildings.png` });
+  // Inspect a building.
+  await page.keyboard.press('0');
+  await page.mouse.click(CX - 100, CY - 80);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${shots}/11-inspect.png` });
 
-// let traffic run 10 game-seconds, then screenshot cars
-await page.keyboard.press('1'); // back to road tool
-await page.waitForTimeout(10000);
-await page.screenshot({ path: `${shots}/09-traffic.png` });
+  // Zoom OUT: positive wheel delta reduces zoom (see main.js wheel handler).
+  await page.mouse.move(CX, CY);
+  for (let i = 0; i < 6; i++) { await page.mouse.wheel(0, 240); await page.waitForTimeout(80); }
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${shots}/12-zoomed-out.png` });
 
-// select tool: click a house to inspect
-await page.keyboard.press('0');
-await page.mouse.click(cx - 100, cy - 80);
-await page.waitForTimeout(300);
-await page.screenshot({ path: `${shots}/10-inspect.png` });
+  // Faster speed for a busier frame.
+  await page.click('[data-speed="3"]');
+  await page.waitForTimeout(8000);
+  await page.screenshot({ path: `${shots}/13-later.png` });
 
-// zoom out with wheel
-await page.mouse.move(cx, cy);
-for (let i = 0; i < 6; i++) { await page.mouse.wheel(0, -240); await page.waitForTimeout(80); }
-await page.waitForTimeout(500);
-await page.screenshot({ path: `${shots}/11-zoomed-out.png` });
+  await page.click('#btnSave');
+  await page.waitForTimeout(400);
 
-// run 20 more seconds at 3x speed for level up / traffic
-await page.click('[data-speed="3"]');
-await page.waitForTimeout(8000);
-await page.screenshot({ path: `${shots}/12-later.png` });
+  console.log('HUD:', JSON.stringify(await hudState(page)));
+  console.log(`playtest artifacts: ${shots}`);
 
-// save
-await page.click('#btnSave');
-await page.waitForTimeout(400);
-
-const hud = await page.evaluate(() => ({
-  pop: document.getElementById('hPop').textContent,
-  trips: document.getElementById('hTrips').textContent,
-  level: document.getElementById('hLevel').textContent,
-  cong: document.getElementById('hCong').textContent,
-}));
-console.log('HUD:', JSON.stringify(hud));
-console.log('Console errors:', errors.length ? errors.join('\n') : 'NONE');
-await browser.close();
-if (errors.length) process.exit(1);
+  if (game.errors.length) {
+    console.error('Browser errors:\n' + game.errors.join('\n'));
+    process.exitCode = 1;
+  }
+} finally {
+  await game.close();
+  await server.stop();
+}
