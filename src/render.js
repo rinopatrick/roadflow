@@ -3,6 +3,7 @@
 import { BIOME } from './terrain.js';
 import { pointAt, clamp, dist, makeRng, splinePoints } from './core.js';
 import { ROAD_CLASS } from './roadNetwork.js';
+import { roadDimensions } from './roadProfiles.js';
 import { BUILDING_DEFS } from './economy.js';
 
 const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
@@ -234,30 +235,30 @@ export class Renderer {
   }
 
   _drawEdgeCasing(ctx, edge, zoom) {
-    const cls = ROAD_CLASS[edge.cls];
+    const d = roadDimensions(edge);
     const pts = edge.pts;
     if (!pts || pts.length < 2) return;
     this._pathPolyline(ctx, pts, zoom);
     // fill px width + casing that shrinks slower than zoom so outlines stay visible
-    ctx.lineWidth = Math.max(cls.width * zoom, 3.2) + Math.max(2.4 * zoom, 1);
+    ctx.lineWidth = Math.max(d.width * zoom, 3.2) + Math.max(2.4 * zoom, 1);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.strokeStyle = edge.cls === 'highway' ? PALETTE.highwayOutline : PALETTE.roadOutline;
     ctx.stroke();
   }
 
   _drawEdgeShadow(ctx, edge, zoom) {
-    const cls = ROAD_CLASS[edge.cls];
+    const d = roadDimensions(edge);
     const pts = edge.pts;
     if (!pts || pts.length < 2) return;
     this._pathPolyline(ctx, pts, zoom);
-    ctx.lineWidth = Math.max(cls.width * zoom, 3.2) + Math.max(2.4 * zoom, 1);
+    ctx.lineWidth = Math.max(d.width * zoom, 3.2) + Math.max(2.4 * zoom, 1);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.strokeStyle = 'rgba(60, 58, 50, 0.18)';
     ctx.stroke();
   }
 
   _drawEdgeFill(ctx, edge, zoom) {
-    const cls = ROAD_CLASS[edge.cls];
+    const cls = roadDimensions(edge);
     const pts = edge.pts;
     if (!pts || pts.length < 2) return;
 
@@ -273,10 +274,11 @@ export class Renderer {
     // trim markings back from both ends so they never cross junction mouths
     const trim = cls.width * 0.75 + 3;
 
-    // lane dashes (multi-lane roads)
-    if (cls.lanesPerDir > 1) {
-      for (let i = 1; i < cls.lanesPerDir; i++) {
-        const off = i * cls.laneW + 0.6;
+    // Lane divider dashes, positioned by the same lane-centre model that places
+    // vehicles, so a dash always sits exactly between two lanes.
+    if (cls.forward + cls.backward > 2 && cls.medianWidth > 0) {
+      for (let i = 1; i < cls.forward; i++) {
+        const off = cls.medianWidth / 2 + i * cls.laneWidth;
         for (const sgn of [1, -1]) {
           this._pathOffsetPolyline(ctx, pts, off * sgn, zoom);
           ctx.lineWidth = 1.1 * zoom;
@@ -286,13 +288,18 @@ export class Renderer {
           ctx.setLineDash([]);
         }
       }
+    } else if (cls.forward + cls.backward === 2 && cls.medianWidth > 0) {
+      // two-lane two-way road: the median IS the centreline, drawn below
     }
 
-    // yellow centerline (solid, Trafficity-style), trimmed at junction mouths
-    this._pathPolylineTrimmed(ctx, pts, edge.cum, trim, zoom);
-    ctx.lineWidth = 1.2 * zoom;
-    ctx.strokeStyle = PALETTE.centerline;
-    ctx.stroke();
+    // yellow centreline (solid, Trafficity-style), trimmed at junction mouths.
+    // Omitted on one-way roads, which have no centre division.
+    if (cls.medianWidth > 0) {
+      this._pathPolylineTrimmed(ctx, pts, edge.cum, trim, zoom);
+      ctx.lineWidth = 1.2 * zoom;
+      ctx.strokeStyle = PALETTE.centerline;
+      ctx.stroke();
+    }
   }
 
   _pathPolylineTrimmed(ctx, pts, cum, trim, zoom) {
@@ -480,7 +487,7 @@ export class Renderer {
     const [msx, msy] = mouseScreen || this.worldToScreen(mx, my);
 
     if (tool === 'road' || tool === 'avenue' || tool === 'highway') {
-      const cls = ROAD_CLASS[tool === 'avenue' ? 'avenue' : tool === 'highway' ? 'highway' : 'street'];
+      const cls = roadDimensions({ cls: tool === 'avenue' ? 'avenue' : tool === 'highway' ? 'highway' : 'street' });
       const roadW = cls.width * zoom;
 
       // When actively drafting points
@@ -773,7 +780,7 @@ export class Renderer {
       const c = edge._congestion || 0;
       if (c < 0.08) continue;
       this._pathPolyline(ctx, edge.pts, zoom);
-      ctx.lineWidth = (ROAD_CLASS[edge.cls].width + 3) * zoom;
+      ctx.lineWidth = (roadDimensions(edge).width + 3) * zoom;
       ctx.strokeStyle = `rgba(226,87,76,${clamp(c, 0, 0.75)})`;
       ctx.lineCap = 'round';
       ctx.stroke();
