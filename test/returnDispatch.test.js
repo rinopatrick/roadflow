@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createIdSource } from '../src/core.js';
 import { RoadNetwork } from '../src/roadNetwork.js';
-import { Economy } from '../src/economy.js';
+import { Economy, RETURN_RETRY_SECONDS } from '../src/economy.js';
 import { TrafficSim } from '../src/traffic.js';
 
 const mockTerrain = { isBuildable: () => true };
@@ -106,7 +106,7 @@ test('a blocked spawn retains the request and retries later', () => {
 
   // After the retry interval it tries again, and succeeds.
   const retry = recorder();
-  eco.processReturns(eco.RETURN_RETRY_SECONDS, retry.spawnCar);
+  eco.processReturns(RETURN_RETRY_SECONDS, retry.spawnCar);
   assert.equal(retry.calls.length, 1, 'retried after the interval');
   assert.equal(eco.pendingReturnCount, 0, 'request cleared after a successful spawn');
 });
