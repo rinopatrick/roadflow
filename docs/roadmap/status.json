@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S01.1",
+  "nextTask": "S01.2",
   "trackedGaps": [
     {
       "id": "GAP-E05-crossings",
@@ -18,6 +18,15 @@
       "fixOwner": "S01.5",
       "actionWhenFixed": "Change the asserted 6 to anchors.expectedJunctionCount in the characterization test and delete this entry.",
       "evidence": "EVIDENCE.md E05"
+    },
+    {
+      "id": "GAP-min-segment-length",
+      "summary": "A road segment shorter than NODE_SNAP (18 wu) cannot be built at all: the far endpoint snaps back onto the existing node, so addRoad silently creates nothing and returns empty nodeIds/edgeIds.",
+      "discoveredIn": "S01.1",
+      "reproducer": "net.addRoad([[0,0],[10,0]]) then net.addRoad([[10,0],[20,0]]) -> second call returns {nodeIds:[], edgeIds:[]} and the graph still has 1 edge.",
+      "impact": "Silent no-op rather than an explained rejection. Blocks short connector and slip-lane segments, which S04.3 needs.",
+      "fixOwner": "S03.2",
+      "actionWhenFixed": "Reject with an explicit reason, or make snapping direction-aware so a short forward segment is buildable. Remove the 18 wu minimum from the S01.1 test helpers' comments once resolved."
     }
   ],
   "branchPolicy": {
@@ -78,7 +87,16 @@
       {"command":"level-up sensitivity probe","exitCode":0,"result":"Threshold LEVEL_XP(1)=300. No-factory fixture: 290 -> 300.000, crosses. With factory (pollution penalty): 290 -> 299.899, does not cross. The setup is tight to ~0.1 XP, proving the threshold test is not vacuous.","artifact":null},
       {"command":"ring-structure inspection probe","exitCode":0,"result":"Each ring node has exactly 2 ring edges + 1 arm edge (degree 3); arm outer ends are degree 1. An initial assertion of mine wrongly expected total degree 2 and failed; the assertion was corrected to check ring-degree, not the source.","artifact":null}
     ],"notes":["Created: test/fixtures/worlds.js (builders + loadLegacyV1 + routeBetween), test/helpers/invariants.js (assertGraphConsistent, assertVehiclesFinite, assertEconomyConsistent), test/invariants.test.js (21 tests), test/fixtures/legacy-v1.json, scripts/make-legacy-fixture.mjs.","Fixture builders expose semantic anchors (nodes/buildings/edges), so tests never depend on generated IDs. Terrain is mocked by default for noise-free geometry; the save fixture uses real Terrain because a save stores a seed.","eightCrossingsWorld's 8-junction target is recorded as a characterization test asserting today's 6, plus trackedGaps entry GAP-E05-crossings. Not a skipped test claiming coverage.","legacy-v1.json is frozen but NOT byte-reproducible: v1 uid() uses Math.random, so regenerating changes IDs. Documented in the generator. Deterministic IDs arrive in S01.1."]},
-    {"id":"S01.1","status":"pending","dependsOn":["S00.3"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
+    {"id":"S01.1","status":"done","dependsOn":["S00.3"],"file":"stages/01-foundation.md","evidence":[
+      {"command":"node --test test/simulationClock.test.js","exitCode":0,"result":"tests 11, pass 11, fail 0. Covers fixed STEP ticks, frame-partition equivalence at 1x/3x/8x, pause freezing time, long-stall dropping, tick-budget cap, reset, invalid-input rejection and sub-step remainder accumulation.","artifact":null},
+      {"command":"node --test test/coreState.test.js","exitCode":0,"result":"tests 15, pass 15, fail 0. Includes a golden-value test proving the makeRng output sequence is byte-identical to the pre-change implementation, RNG state save/restore replay, uint32 validation, and RoadNetwork deterministic-ID plus reserve-on-load behaviour.","artifact":null},
+      {"command":"node --test test/trafficAdvance.test.js","exitCode":0,"result":"tests 7, pass 7, fail 0. Overshoot carried across an edge boundary (s ~ 10 on the second edge, not 0), path progress continuous across 12 transitions, multi-edge crossing bounded, final-overshoot arrival counted once, speedFactor 1 with maxSpeed removed, injected RNG reproducible and demonstrably consulted, identical trajectories for identical seeds.","artifact":null},
+      {"command":"npm test","exitCode":0,"result":"tests 96, pass 96, fail 0, duration_ms 433.91. Was 63 before this task; +33 new. No existing test modified, weakened or removed.","artifact":null},
+      {"command":"npm run test:browser","exitCode":0,"result":"tests 7, pass 7, fail 0. Added a clock test asserting pause freezes simulation time, 1x advances about 1s per wall second, and 8x outpaces 1x.","artifact":null},
+      {"command":"npm run test:soak","exitCode":0,"result":"90s. Final pop 8, trips 10, avg 35s, level 1, xp 31.9201%, cars 2 - identical to the pre-change baseline, demonstrating behavioural equivalence of the fixed clock at 3x.","artifact":"artifacts/soak-1791875239243"},
+      {"command":"in-browser clock probe","exitCode":0,"result":"paused=0 (frozen), speed1=1.2167s, speed3=3.6500s, speed8=9.7333s over equal wall windows. Ratios 3x/1x=3.00 and 8x/1x=8.00. Zero browser errors. Previously the loop incremented traffic.time twice per frame, so 1x ran at roughly 2x.","artifact":null},
+      {"command":"in-browser determinism probe (seed 1, same three clicks, twice)","exitCode":0,"result":"Run A and Run B both produced 5 nodes, 4 edges, 2 buildings with identical node IDs (n1,n2,n4), identical edge IDs (e10,e11) and identical buildings. Pre-change, uid() used Math.random so IDs differed every run.","artifact":null}
+    ],"notes":["Created: src/simulationClock.js, test/simulationClock.test.js, test/coreState.test.js, test/trafficAdvance.test.js. Modified: src/core.js (RNG state access, createIdSource), src/roadNetwork.js (optional ids injection, _newId, reserve on fromJSON), src/traffic.js (injected rng, speedFactor replacing unused maxSpeed, residual-distance route advance), src/main.js (accumulator loop, world ID source, visibilitychange reset).","Deliberate behaviour change: makeRng gains getState/setState WITHOUT altering its output sequence. Protected by a golden-value test captured from the pre-change implementation.","Deliberate behaviour change: traffic.time previously advanced twice per frame (simTime += dt then traffic.update(dt) incremented again). Now the clock is the only source and the renderer reads traffic.time.","Discovered GAP-min-segment-length while writing tests: segments shorter than NODE_SNAP (18 wu) silently build nothing. Recorded as a tracked gap owned by S03.2, not silently worked around.","Two test-authoring errors were found and corrected rather than loosened: (1) a golden capture using toFixed(17) did not round-trip doubles, replaced with String(v); (2) stepBefore was captured after sim.update so transitions never counted. Both were my bugs, not source bugs."]},
     {"id":"S01.2","status":"pending","dependsOn":["S01.1"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.3","status":"pending","dependsOn":["S01.2"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.4","status":"pending","dependsOn":["S01.3"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},

@@ -1,7 +1,7 @@
 // Traffic simulation — cars with IDM-lite car following, intersection
 // priorities (yield to the right), roundabouts and traffic lights.
 import { ROAD_CLASS } from './roadNetwork.js';
-import { pointAt, clamp, dist } from './core.js';
+import { pointAt, clamp, dist, makeRng } from './core.js';
 import { findPath, pathToSteps } from './pathfinding.js';
 
 export const CAR_COLORS = ['#d94f4f', '#4f7bd9', '#4fae59', '#d9a44f', '#8f5bd9', '#4fb8c9', '#d94f8a', '#8a9299', '#3c4148', '#c9d14f'];
@@ -23,7 +23,9 @@ export class Car {
     this.waiting = 0;               // seconds spent stopped
     this.dead = false;
     this.x = 0; this.y = 0; this.dir = 0;
-    this.maxSpeed = 12 + Math.random() * 4;
+    // Deterministic baseline. Per-vehicle variation belongs to vehicle types
+    // (S06.2), not to a random field that nothing reads.
+    this.speedFactor = 1;
     this.tripTimer = 0;
     this._updatePos();
   }
@@ -45,8 +47,11 @@ export class Car {
 }
 
 export class TrafficSim {
-  constructor(net) {
+  // rng: optional seeded generator. Defaulting to a fixed seed keeps existing
+  // callers working while making runs reproducible instead of Math.random.
+  constructor(net, options = {}) {
     this.net = net;
+    this.rng = options.rng ?? makeRng(options.seed ?? 1);
     this.cars = new Map();
     this.time = 0;
     this.bucket = 0;       // spawn bucket timer
@@ -63,9 +68,11 @@ export class TrafficSim {
     // assign lanes: prefer outer lanes on highways, any on streets
     for (const st of steps) {
       const edge = this.net.edges.get(st.edgeId);
-      st.lane = edge && !edge.oneway ? Math.floor(Math.random() * ROAD_CLASS[edge.cls].lanesPerDir) : 0;
+      st.lane = edge && !edge.oneway
+        ? Math.floor(this.rng() * ROAD_CLASS[edge.cls].lanesPerDir)
+        : 0;
     }
-    const car = new Car({ nodes: path.nodes, steps }, Math.floor(Math.random() * CAR_COLORS.length));
+    const car = new Car({ nodes: path.nodes, steps }, Math.floor(this.rng() * CAR_COLORS.length));
     car.net = this.net;
     car.originTime = this.time;
     // don't spawn on top of an existing car
@@ -134,24 +141,38 @@ export class TrafficSim {
       }
     }
 
-    // 3. advance route for cars that passed their edge end
+    // 3. advance route for cars that passed their edge end.
+    // Overshoot is carried into the next edge instead of being zeroed, so a
+    // vehicle's total travelled distance matches its speed. The loop is bounded
+    // by the route length, and a zero-length edge is treated as invalid rather
+    // than spinning forever.
     for (const car of this.cars.values()) {
-      const st = car.currentStep();
-      const edge = net.edges.get(st.edgeId);
-      if (!edge) { car.dead = true; continue; }
-      if (car.s >= edge.total) {
+      if (car.dead) continue;
+      const maxTransitions = car.route.steps.length + 1;
+      let transitions = 0;
+
+      while (!car.dead && transitions++ <= maxTransitions) {
+        const st = car.currentStep();
+        const edge = net.edges.get(st.edgeId);
+        if (!edge || !(edge.total > 0)) { car.dead = true; break; }
+        if (car.s < edge.total) break;   // still on this edge
+
+        car.s -= edge.total;             // carry the residual distance
         car.step++;
-        car.s = 0;
+
         if (car.step >= car.route.steps.length) {
-          // arrived
           car.dead = true;
           car.arrived = true;
           this.stats.trips++;
           this.stats.totalTripTime += car.tripTimer;
           if (car.onArrive) car.onArrive(car);
+          break;
         }
       }
-      car._updatePos();
+
+      // A route that could not be advanced (corrupt or zero-length) is dead.
+      if (!car.dead && transitions > maxTransitions) car.dead = true;
+      if (!car.dead) car._updatePos();
     }
 
     // 4. congestion per edge (exponential moving avg)

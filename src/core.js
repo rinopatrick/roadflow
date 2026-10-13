@@ -14,14 +14,72 @@ export function angleLerp(a, b, t) {
   return a + d * t;
 }
 
-// Mulberry32 seeded RNG
+// Mulberry32 seeded RNG.
+//
+// The returned function keeps the original call signature (`rng()` -> [0,1))
+// and the original output sequence. Two properties are attached so a world can
+// be snapshotted and resumed exactly:
+//   rng.getState()      -> current internal state as uint32
+//   rng.setState(uint)  -> rewind/advance to a previously captured state
+// Restoring state reproduces the subsequent stream exactly, which is what makes
+// a saved simulation reproducible rather than merely seedable.
 export function makeRng(seed) {
   let a = seed >>> 0;
-  return function rng() {
+  function rng() {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  rng.getState = () => a >>> 0;
+  rng.setState = (state) => {
+    if (!Number.isInteger(state) || state < 0 || state > 0xFFFFFFFF) {
+      throw new RangeError(`rng state must be a uint32, got ${state}`);
+    }
+    a = state | 0;
+  };
+  return rng;
+}
+
+// Deterministic, collision-free ID source owned by a world.
+//
+// v1 used `uid()` (Math.random), so IDs changed on every load and could not be
+// snapshotted. This source issues predictable sequential IDs and can be told
+// about IDs that already exist (legacy saves, imported files), guaranteeing a
+// new ID never collides with a reserved one.
+//
+//   const ids = createIdSource();
+//   ids.reserve('n1');        // legacy/imported ID -> never reissued
+//   ids.next('n');            // 'n2'
+//   ids.getState();           // counter, for persistence
+export function createIdSource(next = 1) {
+  if (!Number.isInteger(next) || next < 0) {
+    throw new RangeError(`createIdSource expects a non-negative integer next, got ${next}`);
+  }
+  let counter = next;
+  const reserved = new Set();
+
+  function nextId(prefix = 'id') {
+    let id;
+    // Bounded by the number of reserved IDs; terminates because counter only grows.
+    do {
+      id = `${prefix}${counter++}`;
+    } while (reserved.has(id));
+    reserved.add(id);
+    return id;
+  }
+
+  return {
+    next: nextId,
+    reserve(id) {
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new TypeError(`reserve expects a non-empty string ID, got ${id}`);
+      }
+      reserved.add(id);
+      return id;
+    },
+    has(id) { return reserved.has(id); },
+    getState() { return counter; },
   };
 }
 
