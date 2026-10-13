@@ -13,6 +13,9 @@ export const BUILDING_DEFS = {
 
 export const LEVEL_XP = (lvl) => 300 * lvl * lvl; // cumulative XP for level `lvl`
 
+/** Seconds to wait before retrying a return whose spawn was blocked. */
+export const RETURN_RETRY_SECONDS = 2;
+
 export class Economy {
   constructor(net, terrain, seed = 12345) {
     this.net = net;
@@ -38,11 +41,6 @@ export class Economy {
     this.cancelledReturns = 0;
     this.cancellationReasons = { deletedOrigin: 0, deletedDestination: 0, noAccessNode: 0 };
   }
-
-  /** Seconds to wait before retrying a return whose spawn was blocked. */
-  static RETURN_RETRY_SECONDS = 2;
-
-  get RETURN_RETRY_SECONDS() { return Economy.RETURN_RETRY_SECONDS; }
 
   /** Number of returns still waiting to be dispatched. */
   get pendingReturnCount() { return this._pendingReturns.length; }
@@ -209,7 +207,7 @@ export class Economy {
       if (!car) {
         // Blocked (e.g. the access lane is occupied). Keep the request and
         // retry later rather than silently dropping the trip.
-        r.retryIn = Economy.RETURN_RETRY_SECONDS;
+        r.retryIn = RETURN_RETRY_SECONDS;
         continue;
       }
 
