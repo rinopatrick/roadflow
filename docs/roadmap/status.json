@@ -1,12 +1,26 @@
 {
   "planVersion": 1,
-  "state": "planned-not-started",
+  "state": "in-progress",
   "platform": "browser-first",
   "scope": "ambitious-roadmap",
   "language": "English",
   "publicationAuthorized": false,
-  "implementationAuthorized": false,
-  "nextTask": "S00.1",
+  "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
+  "nextTask": "S00.2",
+  "checkpoint": {
+    "localRepo": "C:/Users/patri/roadflow/.git",
+    "branch": "main",
+    "commit": "1dfd3d9",
+    "commitSubject": "chore: checkpoint Roadflow v1 prototype and roadmap at planning baseline",
+    "trackedFiles": 43,
+    "remote": "none (no remote configured, nothing pushed)",
+    "externalBackup": "C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z",
+    "backupManifest": "MANIFEST.sha256 (42 entries, sha256sum -c all OK)",
+    "backupExcludes": ["node_modules", "shots", "server.log", ".git"],
+    "parentHomeRepoUntouched": "C:/Users/patri/.git still present and unmodified",
+    "runtime": { "node": "v24.14.0", "npm": "11.12.0" },
+    "gitignore": ["node_modules/", "artifacts/", "shots/", "server.log", "*.tmp"]
+  },
   "baseline": {
     "unitTestsPassed": 42,
     "unitTestsFailed": 0,
@@ -19,7 +33,14 @@
     "evidence": "EVIDENCE.md"
   },
   "tasks": [
-    {"id":"S00.1","status":"pending","dependsOn":[],"file":"stages/00-safety.md","evidence":[],"notes":[]},
+    {"id":"S00.1","status":"done","dependsOn":[],"file":"stages/00-safety.md","evidence":[
+      {"command":"git rev-parse --show-toplevel","exitCode":0,"result":"Before: C:/Users/patri (parent home dir). After git init in project: C:/Users/patri/roadflow. Parent C:/Users/patri/.git verified still present and not moved or deleted.","artifact":null},
+      {"command":"node checkpoint.cjs (backup + SHA-256 manifest)","exitCode":0,"result":"sourceFiles 42, manifestLines 42, verified 42, mismatches [] -> dest C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z","artifact":"C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z/MANIFEST.sha256"},
+      {"command":"cmp src/economy.js + cmp index.html (independent of manifest script)","exitCode":0,"result":"both IDENTICAL to source bytes","artifact":null},
+      {"command":"sha256sum -c MANIFEST.sha256","exitCode":0,"result":"all 42 entries OK; on-disk backup file count 42 equals manifest line count 42","artifact":null},
+      {"command":"git add .gitignore src test docs index.html README.md package.json package-lock.json server.js playtest.js soak.js","exitCode":0,"result":"43 staged. Zero paths outside project. Zero node_modules/shots/artifacts staged. Zero home-directory files (NTUSER/OneDrive/Downloads/.ssh/AppData) leaked. Staged-vs-manifest diff is exactly .gitignore (created after backup).","artifact":null},
+      {"command":"npm test","exitCode":0,"result":"tests 42, pass 42, fail 0, duration_ms 369.91 (baseline preserved)","artifact":null}
+    ],"notes":["Operator decisions: local Git repo + external backup; ignore entire shots/ (36 script-generated captures, none authored).","No source files were edited by this task. Only additions: .gitignore and docs/roadmap/status.json notes.","Branch is main; no remote configured; nothing pushed."]},
     {"id":"S00.2","status":"pending","dependsOn":["S00.1"],"file":"stages/00-safety.md","evidence":[],"notes":[]},
     {"id":"S00.3","status":"pending","dependsOn":["S00.2"],"file":"stages/00-safety.md","evidence":[],"notes":[]},
     {"id":"S01.1","status":"pending","dependsOn":["S00.3"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
