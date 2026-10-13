@@ -134,6 +134,15 @@ Tests additionally compare full normalized world through the test adapter so equ
 
 ## 5. Named fixture matrix
 
+Implemented in `test/fixtures/worlds.js` (builders) and `test/helpers/invariants.js` (validators) by S00.3. Import them instead of inventing coordinates:
+
+```js
+import { serviceWorld, crossWorld, loadLegacyV1 } from './fixtures/worlds.js';
+import { assertGraphConsistent, assertVehiclesFinite, assertEconomyConsistent } from './helpers/invariants.js';
+```
+
+Every builder returns the canonical world shape `{net, eco, traffic, terrain}` plus `anchors` with semantic references (a junction node, a house building, an edge). Assertions must use anchors, never generated IDs — v1 IDs are random and become counter-based in S01.1.
+
 | Fixture | Exact intent | Introduced |
 |---|---|---|
 | straightWorld | 600wu road, both directions, orderly following | S00.3 |
@@ -150,6 +159,14 @@ Tests additionally compare full normalized world through the test adapter so equ
 | freightChain | Depot→factory→shop, workforce and stock restrictions | S06.2 |
 | transitCorridor |3stops, limited buses/capacity, full queues, legal walking access | S07.5/S07.6 |
 | mixedCity | Freight, bridge, signal, bus, crosswalk, incident, budget in one scene | S07.7 |
+
+### Tracked gap: eightCrossingsWorld
+
+The builder declares `anchors.expectedJunctionCount === 8`, but the current crossing resolver produces **6**. This is a characterization test, not acceptance: `test/invariants.test.js` asserts today's 6 so that the S01.5 fix appears as a visible diff. When S01.5 lands, change the asserted value to `anchors.expectedJunctionCount` and delete the `GAP-E05-crossings` entry from `status.json`. Do not add a permanently skipped test instead.
+
+### Validator negative controls
+
+Each invariant helper has explicit `assert.throws` controls proving it rejects corrupted input (missing endpoint, non-reciprocal membership, zero-length edge, non-finite geometry, NaN car position, negative speed, car on a deleted edge, negative XP/batch, building with a missing access node). A validator that cannot fail is worse than no validator — keep those controls when editing the helpers.
 
 Maintain stable semantic anchors in fixtures. Do not use screen coordinates as permanent graph IDs. Browser drawing uses camera transforms derived from fixture world points; after layout change compute CSS point via worldToCss rather than tweaking arbitrary click constants until green.
 

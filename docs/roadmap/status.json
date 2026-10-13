@@ -6,7 +6,20 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S00.3",
+  "nextTask": "S01.1",
+  "trackedGaps": [
+    {
+      "id": "GAP-E05-crossings",
+      "summary": "eightCrossingsWorld resolves 6 junctions instead of the expected 8.",
+      "fixture": "test/fixtures/worlds.js::eightCrossingsWorld",
+      "characterizationTest": "test/invariants.test.js :: 'eightCrossingsWorld currently resolves fewer than 8 junctions (tracked gap)'",
+      "currentAsserted": 6,
+      "target": 8,
+      "fixOwner": "S01.5",
+      "actionWhenFixed": "Change the asserted 6 to anchors.expectedJunctionCount in the characterization test and delete this entry.",
+      "evidence": "EVIDENCE.md E05"
+    }
+  ],
   "branchPolicy": {
     "protected": ["main", "master"],
     "integrationTrunk": "roadmap/implementation",
@@ -57,7 +70,14 @@
       {"command":"npm run test:playtest","exitCode":0,"result":"13-frame capture tour written; HUD pop 4, trips 0, level 1. trips 0 matches the pre-existing baseline (tour does not run long enough) and this script asserts no trip count. Zoom-out direction corrected: positive wheel delta now reduces zoom, matching the tour's comment.","artifact":"artifacts/playtest-1791868738673"},
       {"command":"visual inspection of artifacts/run-*/02-road.png","exitCode":0,"result":"Real rendered frame, not blank: committed road with yellow centreline, Connect/Junction snap badge, HUD Population 0, tool badges House 4 / Shop 2 / Factory 1.","artifact":"artifacts/run-1791868317768/02-road.png"}
     ],"notes":["Created: test/browser/harness.js, test/browser/smoke.js, scripts/verify-backup.mjs. Rewrote playtest.js and soak.js as assertion-capable ES modules importing the harness.","Harness owns only the server PID it spawned and the browser it launched; it refuses to test a page that does not look like Roadflow, and uses a free port so it never depends on or kills unrelated processes.","Artifacts now go to artifacts/<run-id>/ (gitignored). Original shots/ left untouched as historical evidence.","scripts/verify-backup.mjs added because 'sha256sum -c' resolves manifest paths against cwd, which caused a false 41-of-42 reading during S00.1. Verified: node scripts/verify-backup.mjs returns 42/42 with 0 failures.","Branch policy recorded in EXECUTOR.md section 5b."]},
-    {"id":"S00.3","status":"pending","dependsOn":["S00.2"],"file":"stages/00-safety.md","evidence":[],"notes":[]},
+    {"id":"S00.3","status":"done","dependsOn":["S00.2"],"file":"stages/00-safety.md","evidence":[
+      {"command":"node scripts/make-legacy-fixture.mjs","exitCode":0,"result":"Wrote test/fixtures/legacy-v1.json: seed 1, 14 nodes, 14 edges, 3 buildings (house/shop/factory), 1 signal, 4 ring nodes, 4 ring edges, 4 one-way edges. Built through the real public APIs and serialized with the real toJSON() methods, so it is an authentic v1 payload rather than hand-written JSON.","artifact":"test/fixtures/legacy-v1.json"},
+      {"command":"round-trip probe through RoadNetwork.fromJSON + Economy.fromJSON","exitCode":0,"result":"nodes 14, edges 14, buildings 3, xp 120, trips 3 preserved; 0 integrity problems; house->shop route resolves (3 nodes, 25.0s).","artifact":null},
+      {"command":"node --test test/invariants.test.js","exitCode":0,"result":"tests 21, pass 21, fail 0. Includes 10 negative controls (assert.throws) proving each invariant helper rejects deliberately corrupted input, and a level-up threshold test.","artifact":null},
+      {"command":"npm test (full suite)","exitCode":0,"result":"tests 63, pass 63, fail 0, duration_ms 368.23. Was 42 before this task; +21 new, no existing test changed or removed.","artifact":null},
+      {"command":"level-up sensitivity probe","exitCode":0,"result":"Threshold LEVEL_XP(1)=300. No-factory fixture: 290 -> 300.000, crosses. With factory (pollution penalty): 290 -> 299.899, does not cross. The setup is tight to ~0.1 XP, proving the threshold test is not vacuous.","artifact":null},
+      {"command":"ring-structure inspection probe","exitCode":0,"result":"Each ring node has exactly 2 ring edges + 1 arm edge (degree 3); arm outer ends are degree 1. An initial assertion of mine wrongly expected total degree 2 and failed; the assertion was corrected to check ring-degree, not the source.","artifact":null}
+    ],"notes":["Created: test/fixtures/worlds.js (builders + loadLegacyV1 + routeBetween), test/helpers/invariants.js (assertGraphConsistent, assertVehiclesFinite, assertEconomyConsistent), test/invariants.test.js (21 tests), test/fixtures/legacy-v1.json, scripts/make-legacy-fixture.mjs.","Fixture builders expose semantic anchors (nodes/buildings/edges), so tests never depend on generated IDs. Terrain is mocked by default for noise-free geometry; the save fixture uses real Terrain because a save stores a seed.","eightCrossingsWorld's 8-junction target is recorded as a characterization test asserting today's 6, plus trackedGaps entry GAP-E05-crossings. Not a skipped test claiming coverage.","legacy-v1.json is frozen but NOT byte-reproducible: v1 uid() uses Math.random, so regenerating changes IDs. Documented in the generator. Deterministic IDs arrive in S01.1."]},
     {"id":"S01.1","status":"pending","dependsOn":["S00.3"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.2","status":"pending","dependsOn":["S01.1"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.3","status":"pending","dependsOn":["S01.2"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
