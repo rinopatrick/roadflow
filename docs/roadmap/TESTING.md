@@ -2,23 +2,40 @@
 
 ## 1. Current versus planned commands
 
-**Available now:**
+**Available now (after S00.2):**
 
 ```text
-npm test
-npm start
-node playtest.js
-node soak.js
+npm test              # unit suite only, browser-free (fast)
+npm run test:browser  # Playwright smoke with gameplay assertions
+npm run test:soak     # assertive economy soak (SOAK_SECONDS to shorten)
+npm run test:playtest # visual capture tour -> artifacts/<run-id>/
+npm start             # static server
 ```
 
-`npm test` currently reports42passes. Existing browser scripts require a running server at localhost8080 and mainly catch console/page errors; they are not a complete gameplay oracle.
+`npm test` reports 42 passes. Browser scripts now spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+
+### Pitfall: verify a backup manifest from inside the backup
+
+`sha256sum -c MANIFEST.sha256` resolves relative paths against the **current working directory**. Running it from the project root checks the live tree instead of the backup, so files edited after the backup was taken report as mismatches. That looks like corruption but is a measurement error — it happened once during S00.1 and produced a false "41 of 42" reading.
+
+Use the path-independent verifier instead, which resolves every entry against the backup directory:
+
+```text
+node scripts/verify-backup.mjs C:/Users/patri/roadflow-backups/<checkpoint>
+```
+
+It exits 0 only when every manifest entry hashes correctly, 1 on any mismatch or missing file, 2 on usage error.
+
+### Pitfall: browser runs must not reuse a stale artifact directory
+
+`RF_RUN_ID` names the artifact directory. Reusing a name overwrites previous captures, so goldens cannot be compared across runs. Omit it for a timestamped directory, or use a fresh name per comparison.
 
 **Created during execution:**
 
 | Command | Owning task | Runs |
 |---|---|---|
-| `npm run test:browser` | S00.2 | Node assert-based Playwright smoke; extend runner to include later browser files |
-| `npm run test:soak` | S00.2 | Assertive economy browser soak |
+| `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend runner to include later browser files |
+| `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | Targeted fixed-clock checks |
 | `node --test test/save.test.js` | S01.7 | Snapshot validation/migration/resume |
 | `node --test test/worldCommands.test.js` | S03.1 | Atomic commands/history |

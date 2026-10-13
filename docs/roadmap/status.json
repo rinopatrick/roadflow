@@ -6,7 +6,15 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S00.2",
+  "nextTask": "S00.3",
+  "branchPolicy": {
+    "protected": ["main", "master"],
+    "integrationTrunk": "roadmap/implementation",
+    "taskBranchPattern": "task/Sxx.y-<slug>",
+    "mergeStrategy": "--no-ff",
+    "enforcedBy": "bigpowers guard-git (blocks direct commits to main; Conventional Commits required)",
+    "harnessPitfall": "Guard evaluates HEAD before running the command, so branch creation and commit must be separate tool calls."
+  },
   "checkpoint": {
     "localRepo": "C:/Users/patri/roadflow/.git",
     "branch": "main",
@@ -41,7 +49,14 @@
       {"command":"git add .gitignore src test docs index.html README.md package.json package-lock.json server.js playtest.js soak.js","exitCode":0,"result":"43 staged. Zero paths outside project. Zero node_modules/shots/artifacts staged. Zero home-directory files (NTUSER/OneDrive/Downloads/.ssh/AppData) leaked. Staged-vs-manifest diff is exactly .gitignore (created after backup).","artifact":null},
       {"command":"npm test","exitCode":0,"result":"tests 42, pass 42, fail 0, duration_ms 369.91 (baseline preserved)","artifact":null}
     ],"notes":["Operator decisions: local Git repo + external backup; ignore entire shots/ (36 script-generated captures, none authored).","No source files were edited by this task. Only additions: .gitignore and docs/roadmap/status.json notes.","Branch is main; no remote configured; nothing pushed."]},
-    {"id":"S00.2","status":"pending","dependsOn":["S00.1"],"file":"stages/00-safety.md","evidence":[],"notes":[]},
+    {"id":"S00.2","status":"done","dependsOn":["S00.1"],"file":"stages/00-safety.md","evidence":[
+      {"command":"npm test","exitCode":0,"result":"tests 42, pass 42, fail 0, duration_ms 395.54 (unit suite stayed browser-free and unchanged)","artifact":null},
+      {"command":"npm run test:browser","exitCode":0,"result":"tests 6, pass 6, fail 0, duration_ms 5159.05. Cases: boot canvas/tools/speeds, road action adds edges, house consumes one and adds 4 residents, rejected shop placement consumes no stock, save writes parseable v1 snapshot with edges>0 and buildings>0, zero browser errors.","artifact":"artifacts/run-1791868317768"},
+      {"command":"node --test test/browser/_fail-probe.mjs (negative control, then deleted)","exitCode":1,"result":"Deliberately wrong expectation (pop 999) exited 1 with AssertionError. Probe logged observed population=4, batch.house=3, proving it reached the real assertion instead of failing early. Probe file removed afterwards.","artifact":null},
+      {"command":"npm run test:soak","exitCode":0,"result":"90s default. t+15s..t+90s samples logged; final pop 8, trips 10, avg 35s, level 1, xp 31.92%, cars 2. Assertions passed: maxCars>0, trips>=1, HUD trips matches economy, xp>0, zero non-finite or negative-speed vehicles, zero errors.","artifact":"artifacts/soak-1791868517540"},
+      {"command":"npm run test:playtest","exitCode":0,"result":"13-frame capture tour written; HUD pop 4, trips 0, level 1. trips 0 matches the pre-existing baseline (tour does not run long enough) and this script asserts no trip count. Zoom-out direction corrected: positive wheel delta now reduces zoom, matching the tour's comment.","artifact":"artifacts/playtest-1791868738673"},
+      {"command":"visual inspection of artifacts/run-*/02-road.png","exitCode":0,"result":"Real rendered frame, not blank: committed road with yellow centreline, Connect/Junction snap badge, HUD Population 0, tool badges House 4 / Shop 2 / Factory 1.","artifact":"artifacts/run-1791868317768/02-road.png"}
+    ],"notes":["Created: test/browser/harness.js, test/browser/smoke.js, scripts/verify-backup.mjs. Rewrote playtest.js and soak.js as assertion-capable ES modules importing the harness.","Harness owns only the server PID it spawned and the browser it launched; it refuses to test a page that does not look like Roadflow, and uses a free port so it never depends on or kills unrelated processes.","Artifacts now go to artifacts/<run-id>/ (gitignored). Original shots/ left untouched as historical evidence.","scripts/verify-backup.mjs added because 'sha256sum -c' resolves manifest paths against cwd, which caused a false 41-of-42 reading during S00.1. Verified: node scripts/verify-backup.mjs returns 42/42 with 0 failures.","Branch policy recorded in EXECUTOR.md section 5b."]},
     {"id":"S00.3","status":"pending","dependsOn":["S00.2"],"file":"stages/00-safety.md","evidence":[],"notes":[]},
     {"id":"S01.1","status":"pending","dependsOn":["S00.3"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.2","status":"pending","dependsOn":["S01.1"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
