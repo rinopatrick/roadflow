@@ -31,6 +31,26 @@ export class Economy {
     this.onToast = null;
     this._tripTimer = 0;
     this.totalTrips = 0;
+    // Return-trip lifecycle. Requests are queued with BUILDING ids and only
+    // resolved to access nodes at dispatch time, because a building can be
+    // deleted, moved or re-attached to a different road during the dwell.
+    this._pendingReturns = [];
+    this.cancelledReturns = 0;
+    this.cancellationReasons = { deletedOrigin: 0, deletedDestination: 0, noAccessNode: 0 };
+  }
+
+  /** Seconds to wait before retrying a return whose spawn was blocked. */
+  static RETURN_RETRY_SECONDS = 2;
+
+  get RETURN_RETRY_SECONDS() { return Economy.RETURN_RETRY_SECONDS; }
+
+  /** Number of returns still waiting to be dispatched. */
+  get pendingReturnCount() { return this._pendingReturns.length; }
+
+  _cancelReturn(request, reason) {
+    this.cancelledReturns++;
+    this.cancellationReasons[reason] = (this.cancellationReasons[reason] || 0) + 1;
+    return reason;
   }
 
   canPlace(type) { return (this.batch[type] || 0) > 0; }
@@ -142,22 +162,61 @@ export class Economy {
     const gain = 10 * pollutionPenalty;
     this.xp += gain;
     this.totalTrips++;
-    // schedule return trip: car drives back home after a stay
-    setTimeout(() => {}, 0); // (return trips handled via _pendingReturns in game loop)
-    this._pendingReturns = this._pendingReturns || [];
-    this._pendingReturns.push({ at: 8 + this.rng() * 15, from: destId, to: homeId });
+    // Queue the return leg. Only building ids are stored here; they are
+    // resolved to current access nodes in processReturns().
+    this._pendingReturns.push({ at: 8 + this.rng() * 15, from: destId, to: homeId, retryIn: 0 });
   }
 
-  // Process pending return trips. spawnCar: fn(from,to)
+  /**
+   * Dispatch pending return trips.
+   *
+   * @param {number} dt simulation seconds
+   * @param {(fromNodeId:string, toNodeId:string)=>object|null} spawnCar
+   *        returns a car, or null when the spawn was blocked
+   *
+   * A request is only removed once a car actually exists for it. A blocked
+   * spawn keeps the request and retries after RETURN_RETRY_SECONDS; a request
+   * whose origin or destination no longer exists is cancelled exactly once
+   * with a recorded reason.
+   */
   processReturns(dt, spawnCar) {
-    if (!this._pendingReturns) return;
     for (let i = this._pendingReturns.length - 1; i >= 0; i--) {
       const r = this._pendingReturns[i];
-      r.at -= dt;
-      if (r.at <= 0) {
-        spawnCar(r.from, r.to);
-        this._pendingReturns.splice(i, 1);
+
+      if (r.retryIn > 0) {
+        r.retryIn -= dt;
+        if (r.retryIn > 0) continue;
       }
+
+      r.at -= dt;
+      if (r.at > 0) continue;
+
+      // Resolve building ids to current access nodes AT DISPATCH TIME.
+      const origin = this.buildings.get(r.from);
+      const destination = this.buildings.get(r.to);
+      if (!origin) { this._cancelReturn(r, 'deletedOrigin'); this._pendingReturns.splice(i, 1); continue; }
+      if (!destination) { this._cancelReturn(r, 'deletedDestination'); this._pendingReturns.splice(i, 1); continue; }
+
+      const fromNode = origin.drivewayNode;
+      const toNode = destination.drivewayNode;
+      if (!this.net.nodes.has(fromNode) || !this.net.nodes.has(toNode)) {
+        this._cancelReturn(r, 'noAccessNode');
+        this._pendingReturns.splice(i, 1);
+        continue;
+      }
+
+      const car = spawnCar(fromNode, toNode);
+      if (!car) {
+        // Blocked (e.g. the access lane is occupied). Keep the request and
+        // retry later rather than silently dropping the trip.
+        r.retryIn = Economy.RETURN_RETRY_SECONDS;
+        continue;
+      }
+
+      car.purpose = 'return';
+      car.homeId = r.to;
+      car.destId = r.from;
+      this._pendingReturns.splice(i, 1);
     }
   }
 

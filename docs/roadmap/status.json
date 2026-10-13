@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S01.2",
+  "nextTask": "S01.3",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -26,6 +26,15 @@
       "fixOwner": "S01.5",
       "actionWhenFixed": "Change the asserted 6 to anchors.expectedJunctionCount in the characterization test and delete this entry.",
       "evidence": "EVIDENCE.md E05"
+    },
+    {
+      "id": "GAP-pending-returns-not-saved",
+      "summary": "Economy.toJSON() omits _pendingReturns, cancelledReturns and cancellationReasons, so saving during the dwell loses the queued return trip. No crash or corruption; the trip is simply lost.",
+      "discoveredIn": "S01.2",
+      "reproducer": "Complete an outbound trip (pendingReturnCount becomes 1), call eco.toJSON(), then Economy.fromJSON() -> pendingReturnCount is 0 and data.pendingReturns is undefined.",
+      "impact": "Minor gameplay gap: a save/load mid-dwell silently cancels a return leg. Becomes more visible once S06.1 adds real journey accounting, which is why it must be fixed before then.",
+      "fixOwner": "S01.7",
+      "actionWhenFixed": "Add pendingReturns, cancelledReturns and cancellationReasons to the v2 snapshot, restore them in fromJSON, and flip the two characterization tests in test/returnDispatch.test.js to assert survival across a save/load."
     },
     {
       "id": "GAP-min-segment-length",
@@ -110,7 +119,14 @@
       {"command":"FOLLOW-UP S01.1b: npm run test:soak","exitCode":0,"result":"After splitting the cosmetic RNG stream, the 90s soak is byte-identical to the pre-change baseline: pop 8, trips 10, avg 35s, xp 31.9201%. An intermediate version that drew rot from the simulation stream produced 12 trips, which is why the streams were split.","artifact":"artifacts/soak-1791877688133"},
       {"command":"FOLLOW-UP S01.1b: npm test + npm run test:browser","exitCode":0,"result":"unit tests 104, pass 104, fail 0; browser tests 8, pass 8, fail 0.","artifact":null}
     ],"notes":["Created: src/simulationClock.js, test/simulationClock.test.js, test/coreState.test.js, test/trafficAdvance.test.js, test/buildingIdentity.test.js. Modified: src/core.js (RNG state access, createIdSource), src/roadNetwork.js (optional ids injection, _newId, reserve on fromJSON), src/traffic.js (injected rng, speedFactor replacing unused maxSpeed, residual-distance route advance), src/main.js (accumulator loop, world ID source, visibilitychange reset, building-ID reservation on load, removed Math.random rot), src/economy.js (live ID source, cosmetic RNG stream, rot, reserve on fromJSON).","Deliberate behaviour change: makeRng gains getState/setState WITHOUT altering its output sequence. Protected by a golden-value test captured from the pre-change implementation.","Deliberate behaviour change: traffic.time previously advanced twice per frame (simTime += dt then traffic.update(dt) incremented again). Now the clock is the only source and the renderer reads traffic.time.","Discovered GAP-min-segment-length while writing tests: segments shorter than NODE_SNAP (18 wu) silently build nothing. Recorded as a tracked gap owned by S03.2, not silently worked around.","Three test-authoring errors were found and corrected rather than loosened: (1) a golden capture using toFixed(17) did not round-trip doubles, replaced with String(v); (2) stepBefore was captured after sim.update so transitions never counted; (3) an earlier determinism probe compared buildings by type@x,y instead of by ID and so missed random building IDs. All were verification weaknesses, not source bugs.","Follow-up S01.1b exists because the original S01.1 determinism claim was incomplete: nodes and edges were deterministic but buildings were not, and rot used Math.random. Recorded in EVIDENCE E10/E11 rather than quietly patched."]},
-    {"id":"S01.2","status":"pending","dependsOn":["S01.1"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
+    {"id":"S01.2","status":"done","dependsOn":["S01.1"],"file":"stages/01-foundation.md","evidence":[
+      {"command":"node --test test/returnDispatch.test.js","exitCode":0,"result":"tests 12, pass 12, fail 0. Before the fix 8 of these failed. Covers access-node resolution, re-attachment during dwell, blocked-spawn retry, deleted origin/destination/noAccessNode cancellation with reasons, no duplicate cancellation, no second XP reward, removal of the no-op setTimeout, a full outbound-dwell-return integration, and two characterization tests pinning that pending returns are not yet persisted (S01.7).","artifact":null},
+      {"command":"npm test","exitCode":0,"result":"tests 117, pass 117, fail 0, duration_ms 451.10. Was 104 before this task; +13 new. No existing test weakened or removed.","artifact":null},
+      {"command":"npm run test:browser","exitCode":0,"result":"tests 8, pass 8, fail 0.","artifact":null},
+      {"command":"in-browser return-lifecycle probe (seed 1, loop road, 2 houses + 1 shop, 3x)","exitCode":0,"result":"t+32s outbound completes: trips=1, pendingReturns=1. t+40s: a car with purpose='return' is driving, pendingReturns=0. t+48s next outbound starts. cancelledReturns=0, all cancellation reasons 0, zero browser errors. Proves returns genuinely spawn rather than failing silently.","artifact":null},
+      {"command":"npm run test:soak","exitCode":0,"result":"90s. Changed from the S01.1 baseline (10 trips, 2 cars, 0% congestion) to 8 trips, 8 cars, 2% congestion. Expected consequence of returns now spawning cars onto the same network, not a regression; the trips>=1 gate still passes.","artifact":"artifacts/soak-1791884080415"},
+      {"command":"mutation check: revert spawnCar(fromNode,toNode) to spawnCar(r.from,r.to)","exitCode":1,"result":"3 of 12 tests failed; restoring the fix returned to 0 failures. Confirms the guards are not vacuous.","artifact":null}
+    ],"notes":["Modified src/economy.js: _pendingReturns/cancelledReturns/cancellationReasons in the constructor, pendingReturnCount getter, Economy.RETURN_RETRY_SECONDS=2, _cancelReturn helper, rewritten _completeTrip (no-op setTimeout removed) and processReturns (dispatch-time resolution, retry on blocked spawn, cancel with reason). Created test/returnDispatch.test.js.","Returns store BUILDING ids and resolve to access nodes at dispatch time, so a building deleted, moved or re-attached during the dwell is handled correctly rather than spawning a car to a stale node.","Test-authoring error found and corrected rather than loosened: my first two cancellation tests had the return trip's origin and destination swapped (the return departs the shop and ends at the home). Renamed and rewritten to test each path accurately, and added a third case for a vanished access node.","Second test-authoring error: the legacy-fixture path used ../fixtures/ from a file already inside test/, which resolved to a non-existent roadflow/fixtures/. Corrected to ./fixtures/.","Deliberately did NOT add pending-return persistence: the plan assigns the full snapshot to S01.7, and a partial implementation would have to be undone. Recorded as GAP-pending-returns-not-saved with characterization tests instead."]},
     {"id":"S01.3","status":"pending","dependsOn":["S01.2"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.4","status":"pending","dependsOn":["S01.3"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
     {"id":"S01.5","status":"pending","dependsOn":["S01.4"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
