@@ -134,6 +134,28 @@ S01.1 subtracts the completed edge length instead of zeroing, bounded by route l
 
 Discovered in S01.1 while writing residual-distance tests with 10 wu edges. Recorded as `GAP-min-segment-length`, owned by S03.2. This will block short connector and slip-lane segments in S04.3 if unresolved.
 
+### E10 — Building IDs stayed random after S01.1 (fixed in S01.1 follow-up)
+
+S01.1 made node and edge IDs deterministic by giving `RoadNetwork` a world ID source, but `Economy.place` still called `uid()` directly at `src/economy.js` — the economy never received the ID source. Building IDs therefore remained random (`1hh2d292` vs `3ibfvlaa` across two identical builds), while nodes and edges were stable.
+
+Anything keyed by building ID was non-reproducible: save/load identity, pending-return targets (which S01.2 depends on), reachability caches, selection state, and fixture assertions.
+
+**This was missed by the S01.1 verification probe**, which compared buildings as `type@x,y` strings instead of by ID. The probe passed while the underlying IDs were still random — a lesson in choosing comparison keys that can actually detect the defect. The follow-up probe compares `buildingIds` directly, and a permanent browser guard asserts ID *format* (`/^b\d+$/`), which fails immediately if `uid()` returns.
+
+Fix: `Economy._newBuildingId()` reads `net.ids` **live** rather than caching it in the constructor, because the save/load path attaches the ID source to the network after the economy is deserialized. `main.js` also reserves loaded building IDs. Verified by mutation: reintroducing `uid()` fails the unit suite (2 failures) and the browser guard (1 failure).
+
+### E11 — Building rotation used Math.random (fixed in S01.1 follow-up)
+
+`main.js` assigned `b.rot = (Math.random() - 0.5) * 0.5` (±0.25 rad, ±14.3°), consumed only by `Renderer._drawBuilding` via `ctx.rotate(rot)`.
+
+**Impact:** purely cosmetic. Nothing in simulation, routing, collision, driveway attachment or overlap checking reads `rot`. It is persisted per building (the serializer spreads the building record), so it round-trips correctly. The real cost was that rendered output differed between runs of the same seed, which would make golden-image visual regression checks — needed by S02 and S08 — flaky.
+
+Fix: `rot` is drawn from a **separate cosmetic RNG stream** (`Economy.cosmeticRng = makeRng(seed ^ 0x9e3779b9)`), as CONTRACTS.md §2 requires. Drawing it from the simulation stream would shift every later `tripTimer` draw and silently retune demand pacing; that was observed during this fix (soak moved from 10 to 12 trips) before the stream was split. After splitting, the 90-second soak is byte-identical to the pre-change baseline (10 trips, XP 31.9201%, avg 35 s), proving the simulation stream is untouched.
+
+### Status of `uid()` after S01.1 follow-up
+
+`uid()` (Math.random-based) now has exactly one caller: the fallback in `RoadNetwork._newId`, used only when a `RoadNetwork` is constructed with no ID source. The game always supplies one (`new RoadNetwork({ ids })`), so node, edge and building IDs are deterministic in play. The fallback exists so the many existing tests and fixtures that construct a bare `new RoadNetwork()` keep working, and so legacy v1 IDs remain loadable. It is not dead code, but it is a legacy path — new world construction should always pass an ID source.
+
 ## Prior Art: reuse decision
 
 | Existing component | Decision | Why |

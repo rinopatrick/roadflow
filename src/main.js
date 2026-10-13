@@ -57,6 +57,9 @@ function loadFromSave() {
   ids = createIdSource();
   for (const id of net.nodes.keys()) ids.reserve(id);
   for (const id of net.edges.keys()) ids.reserve(id);
+  // Building IDs too: loadGame() deserializes the economy before net.ids is
+  // attached, so reserve them here to guarantee new placements never collide.
+  for (const id of eco.buildings.keys()) ids.reserve(id);
   net.ids = ids;
 
   traffic = new TrafficSim(net, { rng: makeRng(data.terrain.seed) });
@@ -251,7 +254,8 @@ function placeBuilding(type, x, y) {
     toast(type === 'house' ? 'Can\'t place here — needs buildable land near a road.' : 'Can\'t place here (blocked, or no road within reach).', 'warn');
     return;
   }
-  b.rot = (Math.random() - 0.5) * 0.5;
+  // b.rot is assigned by Economy.place() from its seeded RNG, so it is
+  // reproducible for a given seed rather than re-randomised here.
   sfx.place();
   updateBatchUI();
 }
