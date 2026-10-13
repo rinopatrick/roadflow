@@ -524,7 +524,13 @@ function boot() {
   if (hasSave() && confirm('A saved city was found. Load it?')) loadFromSave();
   else newGame();
   // debug/testing hook
-  window.__rf = { get state() { return { net, eco, traffic, terrain }; } };
+  // `renderer` is exposed so visual tests can set camera zoom/position precisely
+  // instead of approximating it with synthetic wheel events. Read/write only;
+  // gameplay never reads from __rf.
+  window.__rf = {
+    get state() { return { net, eco, traffic, terrain }; },
+    get renderer() { return renderer; },
+  };
   document.getElementById('help').classList.add('open');
   requestAnimationFrame(loop);
 }

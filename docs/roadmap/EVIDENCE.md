@@ -63,7 +63,7 @@ Do not market proposals as features Trafficity lacks. Absence from a store descr
 
 **Fix owner:** S01.2. Resolve buildings at dispatch, pass driveway nodes, retain blocked returns, explicitly cancel deleted destinations. Add a full outward + dwell + return test, not another direct `_completeTrip` test.
 
-### E02 — Lane widths and rendered pavement disagree
+### E02 — Lane geometry exceeded the rendered pavement (FIXED in S01.3)
 
 `src/roadNetwork.js:ROAD_CLASS`, `laneOffset`; `src/render.js:_drawEdgeFill`; car half-width 1.8:
 
@@ -75,7 +75,23 @@ Do not market proposals as features Trafficity lacks. Absence from a store descr
 
 Numbers derived directly from current formulas. The avenue/highway error is not a palette problem; vehicles and lane markings can sit outside the road surface.
 
-**Fix owner:** S01.3. One profile-derived dimension model for rendering, previews, offsets and picking.
+**Correction made during S01.3 — where the inconsistency actually was.** My first description implied the lane offsets were wrong. Measuring both formulas side by side showed the **lane centres were already correct and are unchanged by the fix**:
+
+| Class | Lane | Offset (old = new) | Old half-width | New half-width | Fitted before? |
+|---|---:|---:|---:|---:|---|
+| street | 0 | 3.85 | 5.50 | 8.10 | **no** |
+| avenue | 1 | 9.60 | 8.00 | 13.60 | **no** |
+| highway | 2 | 15.60 | 12.00 | 19.60 | **no** |
+
+The defect was a **too-narrow pavement**, not misplaced lanes. `ROAD_CLASS.width` was a hand-chosen number (11/16/24) that did not follow from the lane formula (`laneW` plus a hard-coded 1.2 median). The two were independent sources of truth.
+
+This mattered for verification: my first mutation reverted the *offset* formula, which reproduced nothing (1 incidental failure in a one-way case). The **accurate** mutation reverts the *width* to 11/16/24 and fails 4 tests with exactly the E02 numbers (`5.650 exceeds 5.500`, `15.600 exceeds 12.000`). Testing the wrong half of a two-part inconsistency is a trap worth recording.
+
+**Fix (S01.3):** `src/roadProfiles.js` becomes the single dimension authority. `width = (forward + backward) * laneWidth + medianWidth + 2 * shoulderWidth`, and `laneCenterOffset(edge, dir, lane)` derives positions from the same record. `ROAD_CLASS.width`/`lanesPerDir`/`laneW` are now **recomputed from the profile model at module load**, so they cannot diverge again. Rendering (casing, shadow, fill, lane dashes, centreline, congestion overlay, road preview) and the roundabout radius all read the profile model.
+
+Resulting widths: street 16.2, avenue 27.2, highway 39.2 wu. Verified in-browser: 12 lanes measured across all three classes, **0 containment violations**, worst case avenue lane 1 at 2.2 wu of slack inside the pavement (was 3.4 wu outside).
+
+**Simulation is unaffected** because lane centres did not move: the 90-second soak is byte-identical to S01.2 (8 trips, 8 cars, 2% congestion, avg 33 s, XP 25.5361%). Only the drawn surface changed.
 
 ### E03 — Congestion EMA is timestep-sensitive and strongly attenuated
 

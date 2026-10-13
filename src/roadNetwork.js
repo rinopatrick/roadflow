@@ -9,12 +9,25 @@
 // Roads are drawn by the player as sequences of control points; new roads snap
 // to existing nodes and can split existing edges, producing real junctions.
 import { dist, splinePoints, polylineLengths, projectOnPolyline, pointAt, clamp, segDist, uid } from './core.js';
+import { roadDimensions, laneCenterOffset, outerLaneOffset } from './roadProfiles.js';
 
+// `width` and `lanesPerDir` are kept for backwards compatibility with existing
+// callers and tests, but they are DERIVED from roadProfiles so there is only
+// one set of numbers. `laneW` is retained for the same reason.
 export const ROAD_CLASS = {
-  street:  { lanesPerDir: 1, speed: 14, width: 11, laneW: 6.5, color: '#ffffff' },  // px/s at 1x
+  street:  { lanesPerDir: 1, speed: 14, width: 11, laneW: 6.5, color: '#ffffff' },
   avenue:  { lanesPerDir: 2, speed: 18, width: 16, laneW: 6.0, color: '#ffffff' },
   highway: { lanesPerDir: 3, speed: 30, width: 24, laneW: 6.0, color: '#ffffff' },
 };
+
+// Recompute the derived fields from the profile model at module load, so a
+// change in roadProfiles cannot leave ROAD_CLASS disagreeing with it.
+for (const cls of Object.keys(ROAD_CLASS)) {
+  const d = roadDimensions({ cls });
+  ROAD_CLASS[cls].width = d.width;
+  ROAD_CLASS[cls].lanesPerDir = d.forward;
+  ROAD_CLASS[cls].laneW = d.laneWidth;
+}
 
 const NODE_SNAP = 18;      // snap to existing node within this dist
 const EDGE_SNAP = 12;      // split existing edge within this dist
@@ -264,7 +277,7 @@ export class RoadNetwork {
     });
     if (armIds.length < 2) return null;
 
-    const maxW = Math.max(...armIds.map(id => ROAD_CLASS[this.edges.get(id).cls].width));
+    const maxW = Math.max(...armIds.map(id => roadDimensions(this.edges.get(id)).width));
     const R = 24 + maxW / 2;
 
     // 1. split every arm at radius R (measured from the center side) and drop
@@ -347,7 +360,7 @@ export class RoadNetwork {
     const ordered = [...ringNodes].sort((p, q) =>
       Math.atan2(q.y - center.y, q.x - center.x) - Math.atan2(p.y - center.y, p.x - center.x));
     const widest = armIds.map(id => this.edges.get(id)?.cls).filter(Boolean)
-      .reduce((acc, c) => (ROAD_CLASS[c].width > ROAD_CLASS[acc].width ? c : acc), 'street');
+      .reduce((acc, c) => (roadDimensions({ cls: c }).width > roadDimensions({ cls: acc }).width ? c : acc), 'street');
     const ringCls = widest === 'street' ? 'street' : 'avenue';
     const ringNodeIds = ordered.map(n => n.id);
     const ringEdgeIds = [];
@@ -528,10 +541,10 @@ export class RoadNetwork {
   otherEnd(edge, nodeId) { return edge.a === nodeId ? edge.b : edge.a; }
 
   // Lane center offset from the road centerline for direction travel, lane i.
+  // Delegates to roadProfiles so the offset cannot drift from the pavement
+  // width that rendering uses (EVIDENCE E02).
   laneOffset(edge, i) {
-    const c = ROAD_CLASS[edge.cls];
-    const centerGap = 1.2;
-    return centerGap / 2 + (i + 0.5) * c.laneW;
+    return Math.abs(laneCenterOffset(edge, 1, i));
   }
 
   // Point on lane: direction a->b (dir=1) or b->a (dir=-1), lane index i, arc s.
@@ -539,7 +552,7 @@ export class RoadNetwork {
   // (dx,dy) is (-dy,dx). For reverse travel, the right side flips sign.
   lanePoint(edge, dir, i, s) {
     const p = pointAt(edge.pts, edge.cum, dir === 1 ? s : edge.total - s);
-    const off = this.laneOffset(edge, i);
+    const off = Math.abs(laneCenterOffset(edge, dir, i));
     const nx = -Math.sin(p.dir), ny = Math.cos(p.dir); // right-hand normal (y-down)
     const sgn = dir === 1 ? 1 : -1;
     return { x: p.x + nx * off * sgn, y: p.y + ny * off * sgn, dir: p.dir };
