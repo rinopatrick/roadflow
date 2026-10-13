@@ -1,0 +1,14 @@
+{
+  "name": "roadflow",
+  "version": "1.0.0",
+  "description": "A city builder focused on traffic. Original game in the traffic-sim genre.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.64.0"
+  }
+}

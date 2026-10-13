@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Roadflow — a city builder focused on traffic</title>
+<style>
+  :root {
+    --panel-bg: rgba(255, 255, 255, 0.92);
+    --panel-border: rgba(0, 0, 0, 0.12);
+    --text: #22252a;
+    --text-dim: #6c7380;
+    --accent: #2bb8e8;
+    --accent-glow: rgba(43, 184, 232, 0.25);
+    --accent-warm: #f59e0b;
+    --danger: #ef4444;
+    --shadow: 0 4px 18px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+    --pill-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #efece3; font-family: var(--font); color: var(--text); -webkit-font-smoothing: antialiased; }
+  #game { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #game.panning { cursor: grabbing; }
+
+  /* ---- Floating Glassy Bottom Toolbar (Trafficity Dock) ---- */
+  #toolbar {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px; padding: 5px 8px;
+    background: var(--panel-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-radius: 30px; border: 1px solid var(--panel-border);
+    box-shadow: var(--shadow);
+    z-index: 10; max-width: calc(100vw - 32px); overflow-x: auto;
+  }
+  .tool-btn {
+    display: flex; align-items: center; gap: 6px;
+    height: 38px; padding: 0 13px;
+    background: transparent; border: none; border-radius: 20px;
+    color: var(--text-dim); font-size: 13px; font-weight: 500; cursor: pointer;
+    transition: all .14s cubic-bezier(0.16, 1, 0.3, 1);
+    white-space: nowrap; user-select: none;
+  }
+  .tool-btn:hover { background: rgba(0,0,0,0.05); color: var(--text); }
+  .tool-btn.active {
+    background: #22252a; color: #ffffff;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.24);
+  }
+  .tool-btn .icon { font-size: 16px; line-height: 1; }
+  .tool-sep { width: 1px; height: 20px; background: var(--panel-border); margin: 0 3px; flex-shrink: 0; }
+  .tool-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px;
+    border-radius: 9px; font-size: 11px; font-weight: 600;
+    background: rgba(0,0,0,0.08); color: var(--text);
+    transition: all .14s;
+  }
+  .tool-btn.active .tool-count { background: rgba(255,255,255,0.22); color: #ffffff; }
+  .tool-btn.depleted { opacity: 0.45; }
+  .tool-btn.depleted .tool-count { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+
+  /* ---- Floating Glassy HUD Top-Left ---- */
+  #hud {
+    position: absolute; top: 16px; left: 16px; z-index: 10;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .hud-card {
+    background: var(--panel-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-radius: 18px; border: 1px solid var(--panel-border);
+    padding: 12px 16px; color: var(--text); box-shadow: var(--shadow);
+    font-size: 12.5px; min-width: 190px;
+  }
+  .hud-card .row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 2px 0; }
+  .hud-card .row .v { font-weight: 600; color: #111418; font-variant-numeric: tabular-nums; }
+  .hud-card h3 { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin-bottom: 5px; font-weight: 600; }
+  #xpbar { height: 5px; background: rgba(0,0,0,0.07); border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  #xpfill { height: 100%; width: 0%; background: #2bb8e8; border-radius: 4px; transition: width .3s ease; }
+  #cityname { font-weight: 700; font-size: 15px; color: #111418; letter-spacing: -0.01em; }
+
+  /* ---- Speed & Time Controls (Top Right) ---- */
+  #topright {
+    position: absolute; top: 16px; right: 16px; z-index: 10;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #speedctl {
+    display: flex; align-items: center; gap: 2px;
+    background: var(--panel-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-radius: 24px; border: 1px solid var(--panel-border); padding: 4px 6px;
+    box-shadow: var(--shadow);
+  }
+  .spd-btn {
+    width: 32px; height: 30px; border: none; border-radius: 15px; background: transparent;
+    color: var(--text-dim); font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all .12s ease;
+  }
+  .spd-btn:hover { background: rgba(0,0,0,0.06); color: var(--text); }
+  .spd-btn.active { background: #22252a; color: #ffffff; }
+
+  /* ---- Menu / Utility Pills (Next to Speed) ---- */
+  #menu { display: flex; gap: 4px; }
+  .menu-btn {
+    padding: 7px 13px; border: 1px solid var(--panel-border); border-radius: 18px;
+    background: var(--panel-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    color: var(--text-dim); font-size: 12px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow);
+    transition: all .12s ease;
+  }
+  .menu-btn:hover { color: var(--text); background: #ffffff; border-color: rgba(0,0,0,0.2); }
+
+  /* ---- Hidden compatibility batch container (DOM elements preserved for test / logic hooks) ---- */
+  #batch { display: none; }
+
+  /* ---- Inspect panel ---- */
+  #inspect {
+    position: absolute; right: 16px; top: 102px; width: 240px; z-index: 10;
+    background: var(--panel-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-radius: 16px; border: 1px solid var(--panel-border); padding: 14px 16px;
+    color: var(--text); box-shadow: var(--shadow);
+    display: none;
+  }
+  #inspect.open { display: block; animation: panelin .18s cubic-bezier(0.16, 1, 0.3, 1); }
+  @keyframes panelin { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  #inspect h3 { margin-bottom: 8px; font-size: 14px; font-weight: 600; color: #111418; }
+  #inspect .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  #inspect label { font-size: 11px; color: var(--text-dim); display: block; margin-top: 8px; font-weight: 500; }
+  #inspect input[type=range] { width: 100%; accent-color: #2bb8e8; margin-top: 3px; }
+  #inspect .close {
+    position: absolute; top: 10px; right: 12px; background: none; border: none;
+    color: var(--text-dim); font-size: 15px; cursor: pointer;
+  }
+  #inspect .close:hover { color: var(--text); }
+
+  /* ---- Diegetic In-World Style Badges & Floating Toasts ---- */
+  #toasts { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+  .toast {
+    background: #ffffff; color: #22252a; padding: 6px 14px; border-radius: 20px;
+    font-size: 12px; font-weight: 500; box-shadow: 0 4px 14px rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.06);
+    border: 1px solid rgba(0,0,0,0.09); animation: toastin .2s ease-out;
+  }
+  .toast.warn { border-color: rgba(245, 158, 11, 0.4); background: #fffdf5; color: #b45309; }
+  @keyframes toastin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* ---- Help overlay ---- */
+  #help {
+    position: absolute; inset: 0; z-index: 30; display: none;
+    background: rgba(30,35,42,0.4); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    align-items: center; justify-content: center;
+  }
+  #help.open { display: flex; }
+  #help .card {
+    background: #ffffff; border-radius: 20px; padding: 28px 32px; max-width: 480px; max-height: 86vh; overflow: auto;
+    color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,0.15); font-size: 13.5px; line-height: 1.6;
+    border: 1px solid var(--panel-border);
+  }
+  #help h2 { margin-bottom: 12px; font-size: 20px; color: #111418; }
+  #help kbd { background: #f1f3f5; border: 1px solid #d0d7de; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: inherit; font-weight: 600; color: #333; }
+  #help button { margin-top: 18px; padding: 8px 22px; border: none; border-radius: 12px; background: #22252a; color: #ffffff; font-weight: 600; font-size: 13px; cursor: pointer; transition: background .12s; }
+  #help button:hover { background: #111418; }
+</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="hud-card">
+      <div id="cityname">New City</div>
+      <div class="row"><span>Level</span><span class="v" id="hLevel">1</span></div>
+      <div id="xpbar"><div id="xpfill"></div></div>
+      <div class="row" style="margin-top:6px"><span>Population</span><span class="v" id="hPop">0</span></div>
+      <div class="row"><span>Trips served</span><span class="v" id="hTrips">0</span></div>
+      <div class="row"><span>Avg. trip</span><span class="v" id="hAvg">—</span></div>
+      <div class="row"><span>Congestion</span><span class="v" id="hCong">0%</span></div>
+    </div>
+  </div>
+
+  <div id="toolbar"></div>
+
+  <div id="batch">
+    <h3>Buildings available</h3>
+    <div class="b"><span>🏠 Houses</span><span id="bHouse">3</span></div>
+    <div class="b"><span>🏪 Shops</span><span id="bShop">1</span></div>
+    <div class="b"><span>🏭 Factories</span><span id="bFactory">1</span></div>
+  </div>
+
+  <div id="topright">
+    <div id="speedctl">
+      <button class="spd-btn" data-speed="0" title="Pause (Space)">⏸</button>
+      <button class="spd-btn active" data-speed="1" title="Normal speed">▶</button>
+      <button class="spd-btn" data-speed="3" title="Fast speed">▶▶</button>
+      <button class="spd-btn" data-speed="8" title="Ultra speed">▶▶▶</button>
+    </div>
+    <div id="menu">
+      <button class="menu-btn" id="btnSave">Save</button>
+      <button class="menu-btn" id="btnLoad">Load</button>
+      <button class="menu-btn" id="btnNew">New map</button>
+      <button class="menu-btn" id="btnHelp">?</button>
+    </div>
+  </div>
+
+  <div id="inspect">
+    <button class="close" id="inspectClose">✕</button>
+    <h3 id="insTitle">—</h3>
+    <div id="insBody"></div>
+  </div>
+
+  <div id="toasts"></div>
+  <pre id="errbanner" style="display:none;position:absolute;bottom:8px;right:8px;z-index:99;background:#5c1a1a;color:#ffd9d9;padding:8px 12px;border-radius:8px;font-size:11px;max-width:60vw;max-height:40vh;overflow:auto;white-space:pre-wrap"></pre>
+
+  <div id="help">
+    <div class="card">
+      <h2>Roadflow</h2>
+      <p>A city builder focused on the fun part: <b>roads and traffic</b>.</p>
+      <p style="margin-top:10px">
+        <b>Build roads</b> with the road tool — click to set points, double-click or
+        press <kbd>Enter</kbd> to finish. They connect automatically.<br>
+        <b>Place buildings</b> from your available batch; they need a driveway to reach a road.<br>
+        <b>Fix jams</b> with roundabouts and fully-customizable traffic lights.<br>
+        Happy, well-connected citizens level up your city and grant more buildings.
+      </p>
+      <p style="margin-top:10px; color:var(--text-dim)">
+        <kbd>Drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>1-9</kbd> tools · <kbd>Space</kbd> pause ·
+        <kbd>Esc</kbd> cancel · <kbd>Del</kbd>/<kbd>right-click</kbd> bulldoze mode
+      </p>
+      <button id="helpClose">Let's build</button>
+    </div>
+  </div>
+
+  <script>
+    window.addEventListener('error', e => {
+      const b = document.getElementById('errbanner');
+      b.style.display = 'block';
+      b.textContent += (e.message || e.error) + '\n  at ' + (e.filename||'') + ':' + (e.lineno||'') + '\n';
+    });
+    window.addEventListener('unhandledrejection', e => {
+      const b = document.getElementById('errbanner');
+      b.style.display = 'block';
+      b.textContent += 'rejection: ' + (e.reason && e.reason.message || e.reason) + '\n';
+    });
+  </script>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
