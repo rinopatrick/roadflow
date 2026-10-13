@@ -193,6 +193,97 @@ test('graph and building IDs are deterministic, not random', async () => {
     `building IDs must be sequential, got ${ids.buildings.join(', ')}`);
 });
 
+test('HUD congestion agrees with the shared metric, with no rescaling fudge', async () => {
+  const { page } = game;
+  const report = await page.evaluate(async () => {
+    const m = await import('/src/metrics.js');
+    const s = window.__rf.state;
+    const share = m.cityCongestion(s.net);
+    return {
+      hud: document.getElementById('hCong').textContent,
+      expected: m.formatCongestion(share),
+      share,
+    };
+  });
+  assert.ok(report.share >= 0 && report.share <= 1,
+    `city congestion must be a share in 0..1, got ${report.share}`);
+  assert.equal(report.hud, report.expected,
+    `HUD shows ${report.hud} but the metric says ${report.expected} `
+    + '(the old HUD divided by 0.6 to hide a broken EMA)');
+});
+
+test('the drawn signal colour matches the phase the simulator obeys', async () => {
+  const { page } = game;
+
+  // Build a cross junction, install a light, and centre the camera on it so the
+  // dot is not obscured by HUD panels.
+  const setup = await page.evaluate(async () => {
+    const s = window.__rf.state;
+    const net = s.net;
+    const r = window.__rf.renderer;
+    net.addRoad([[-400, 0], [400, 0]], 'street');
+    net.addRoad([[0, -400], [0, 400]], 'street');
+    const junction = [...net.nodes.values()].find(n => n.edges.size === 4);
+    junction.type = 'light';
+    junction.light = { cycle: 20, offset: 0, greenRatio: 0.4, axis: 'x' };
+    r.cam.x = junction.x;
+    r.cam.y = junction.y;
+    r.cam.zoom = 2;
+    return { id: junction.id, x: junction.x, y: junction.y };
+  });
+
+  // Freeze time so the drawn frame and the expected phase are computed from the
+  // same clock value.
+  await page.click('[data-speed="0"]');
+
+  const PHASE_COLOURS = {
+    green: [0x3f, 0xae, 0x5a],
+    yellow: [0xe8, 0xb9, 0x3f],
+    allRed: [0xe2, 0x57, 0x4c],
+  };
+
+  /** Samples the pixel at the junction centre and classifies it. */
+  const sampleAt = (t) => page.evaluate(([simTime, colours, nodeId]) => {
+    const s = window.__rf.state;
+    const r = window.__rf.renderer;
+    s.traffic.time = simTime;
+    const node = s.net.nodes.get(nodeId);
+    const [sx, sy] = r.worldToScreen(node.x, node.y);
+    const px = r.ctx.getImageData(Math.round(sx), Math.round(sy), 1, 1).data;
+    return { rgb: [px[0], px[1], px[2]], colours };
+  }, [t, PHASE_COLOURS, setup.id]);
+
+  const classify = (rgb) => {
+    let best = null;
+    for (const [name, c] of Object.entries(PHASE_COLOURS)) {
+      const d = Math.hypot(rgb[0] - c[0], rgb[1] - c[1], rgb[2] - c[2]);
+      if (!best || d < best.d) best = { name, d };
+    }
+    return best;
+  };
+
+  // Cycle 20 / ratio 0.4 => green 0-4, yellow 4-6, allRed 6-10 on axis x.
+  const cases = [
+    { t: 1.0, expect: 'green' },
+    { t: 5.0, expect: 'yellow' },
+    { t: 8.0, expect: 'allRed' },
+    { t: 11.0, expect: 'allRed' }, // axis y is green, so the x dot is red
+  ];
+
+  for (const { t, expect } of cases) {
+    const { rgb } = await sampleAt(t);
+    await page.waitForTimeout(120); // let the rAF loop repaint
+    const fresh = await sampleAt(t);
+    const verdict = classify(fresh.rgb);
+    assert.ok(verdict.d < 40,
+      `t=${t}: sampled rgb ${rgb.join(',')} is not a signal colour`);
+    assert.equal(verdict.name, expect,
+      `t=${t}: expected the dot to be ${expect}, sampled ${verdict.name} (rgb ${fresh.rgb.join(',')})`);
+  }
+
+  await page.click('[data-speed="1"]');
+});
+
 test('no console, page or request errors occurred', async () => {
   assert.deepEqual(game.errors, [], `browser errors:\n  ${game.errors.join('\n  ')}`);
   console.log(`browser artifacts: ${shots}`);

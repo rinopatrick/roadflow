@@ -93,17 +93,50 @@ Resulting widths: street 16.2, avenue 27.2, highway 39.2 wu. Verified in-browser
 
 **Simulation is unaffected** because lane centres did not move: the 90-second soak is byte-identical to S01.2 (8 trips, 8 cars, 2% congestion, avg 33 s, XP 25.5361%). Only the drawn surface changed.
 
-### E03 — Congestion EMA is timestep-sensitive and strongly attenuated
+### E03 — Congestion EMA was timestep-sensitive, attenuated, and hid a gridlock (FIXED in S01.4)
 
-`src/traffic.js:update`: old value multiplied by `.98`; input by `.02 * (dt * 60) * .05`. At 60 Hz with every car stopped, its equilibrium is **0.05**, not 1. HUD further rescales by `/0.6`. Changing speed/dt changes the effective measurement.
+`src/traffic.js:update`: old value multiplied by `.98`; input by `.02 * (dt * 60) * .05`. At 60 Hz with every car stopped, its equilibrium is **0.05**, not 1. HUD further rescaled by `/0.6`. Changing speed/dt changed the effective measurement.
 
-**Fix owner:** S01.4. Use `alpha = 1 - exp(-dt/tau)`, publish true [0,1] normalized stopped share plus queue/throughput separately; never hide unmet demand in the denominator.
+**Fix (S01.4):** `alpha = 1 - exp(-dt / tau)` with `tau = 5`, exactly timestep independent (after simulated time T the value is `1 - exp(-T / tau)` however T was subdivided). Values clamp to 0..1 and represent a true stopped-vehicle share. The city figure in `src/metrics.js` is **weighted by vehicles present**, so a jammed road is not diluted by empty ones, and the `/0.6` HUD fudge is gone. Verified: 60/30/120 Hz agree within 1e-6, the closed-form value matches after a known duration, and reverting the old scaling fails 7 of 14 tests.
 
-### E04 — Signal ratio does not represent a full phase schedule
+**The fix revealed a pre-existing gridlock.** The soak went from reporting 2% to 94%, so this was investigated rather than accepted:
 
-`src/traffic.js:_mustYield`: after `greenLen` but before the end of a half-cycle, the selected axis returns `null` (go), except for a short preceding yellow condition. Probe at time 4, cycle 14, ratio .42 found no stop despite green length 2.94. `Renderer._drawNode` computes its own simpler half-cycle indicator and ignores yellow/clearance.
+- `scripts/diagnose-gridlock.mjs` reports all 8 vehicles stopped, several for **69 seconds**, city congestion 92%.
+- Running the same scenario with congestion-aware routing **disabled** reproduces the deadlock identically (8 stopped, 68.9s max wait). The deadlock is therefore **not** caused by the new congestion values; the old metric was **hiding** it.
+- Every stuck vehicle had `nextNodeDegree = 6`, which led to E12 below.
 
-**Fix owner:** S01.4 introduces a shared conservative legacy phase function; S04.4 replaces axis phases with movement phases. UI and sim must consume the same phase state.
+Recorded as `GAP-loop-gridlock`. The old HUD reporting "2%" while every vehicle was stopped is the clearest example in this codebase of a metric stating the opposite of the truth.
+
+### E12 — `addRoad` with multiple control points builds malformed topology (open, tracked)
+
+A four-corner closed loop drawn as **one** `addRoad` call produces **6 edges and 5 nodes** instead of 4 edges:
+
+```
+n1 (-250,30) degree=1     <- two SEPARATE nodes at identical coordinates
+n8 (-250,30) degree=1     <- the loop never closes
+n2 (150,30)  degree=6     <- a 6-way hub where a simple corner should be
+```
+
+Drawing the identical loop as four two-point calls gives the expected 4 edges and a clean degree-2 ring:
+
+| Variant | edges | max degree | vehicles | stopped | trips | max wait |
+|---|---:|---:|---:|---:|---:|---:|
+| one `addRoad` call | 10 | 6 | 8 | **8** | 8 | 69s |
+| four `addRoad` calls | 8 | 2 | 4 | 2 | **10** | 33s |
+
+**Root cause:** each link passes `controls.slice(1, i)` as its midpoints, so later segments repeat earlier control points and overlap; `resolveCrossings` then splits them into spurious junctions. This matches the source finding already recorded in this document before any code was changed.
+
+This is the **primary** cause of `GAP-loop-gridlock`, which is why the two are recorded separately: S01.5 owns the geometry, S04.2/S04.6 own junction yielding. Deliberately not patched during S01.4, because a band-aid would conflict with both.
+
+### E04 — Signal ratio did not represent a real phase schedule (FIXED in S01.4)
+
+`src/traffic.js:_mustYield`: after `greenLen` but before the end of a half-cycle, the selected axis returns `null` (go), except for a short preceding yellow condition. Probe at time 4, cycle 14, ratio .42 found no stop despite green length 2.94. `Renderer._drawNode` computed its own simpler half-cycle indicator and ignored yellow/clearance entirely.
+
+**Fix (S01.4):** `src/signals.js` is the single phase authority. Per half-cycle: `green = half * greenRatio`, `yellow = min(2, (half - green)/2)`, `allRed = half - green - yellow`. For cycle 14 / ratio 0.42: green 2.94, yellow 2.00, all-red 2.06 — so t=4 is yellow and t=6 is all-red, where the old code allowed unrestricted passage. `greenRatio` is clamped to 0.05..0.90 so a clearance interval always survives; invalid cycles and non-finite times are rejected rather than producing a nonsense phase.
+
+`_drawNode` now calls `getLegacyPhase` instead of its own comparison, so the dot can no longer show green while the simulator holds traffic. Verified by a **pixel-level browser test** sampling the junction centre at t=1 (green), 5 (yellow), 8 (all-red) and 11 (axis y green, so the dot is red).
+
+A duplicate clock was removed at the same time: `main.js` kept a separate `simTime` counter that the renderer read, which is exactly how the two could disagree. The renderer now reads `traffic.time` directly. S04.4 replaces axis phases with movement phases; this stage keeps the conservative legacy shape so the fix stays focused.
 
 ### E05 — Crossing resolution silently stops at six
 

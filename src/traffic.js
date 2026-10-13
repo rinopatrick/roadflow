@@ -3,6 +3,14 @@
 import { ROAD_CLASS } from './roadNetwork.js';
 import { pointAt, clamp, dist, makeRng } from './core.js';
 import { findPath, pathToSteps } from './pathfinding.js';
+import { phaseForAxis } from './signals.js';
+
+/**
+ * Time constant of the per-edge congestion EMA, in simulation seconds.
+ * `alpha = 1 - exp(-dt / tau)` makes the smoothing timestep independent: after
+ * simulated time T the value is `1 - exp(-T / tau)` however T was subdivided.
+ */
+export const CONGESTION_TAU = 5;
 
 export const CAR_COLORS = ['#d94f4f', '#4f7bd9', '#4fae59', '#d9a44f', '#8f5bd9', '#4fb8c9', '#d94f8a', '#8a9299', '#3c4148', '#c9d14f'];
 
@@ -175,10 +183,18 @@ export class TrafficSim {
       if (!car.dead) car._updatePos();
     }
 
-    // 4. congestion per edge (exponential moving avg)
+    // 4. congestion per edge: the share of present vehicles that are stopped,
+    //    smoothed with a timestep-independent EMA. The previous formula scaled
+    //    the input by 0.02 * 0.05, so a fully jammed edge settled at 0.05 rather
+    //    than 1, and its `(dt * 60)` factor made the result depend on timestep.
     for (const e of net.edges.values()) {
       const frac = e._cars ? (e._congAcc / e._cars) : 0;
-      e._congestion = (e._congestion ?? 0) * 0.98 + frac * 0.02 * (dt * 60) * 0.05;
+      const alpha = 1 - Math.exp(-dt / CONGESTION_TAU);
+      const current = e._congestion ?? 0;
+      e._congestion = clamp(current + (frac - current) * alpha, 0, 1);
+      // Published for vehicle-weighted aggregation in metrics.js. `_cars` is the
+      // per-tick accumulator and is reset below; `_carCount` persists.
+      e._carCount = e._cars;
       e._cars = 0;
     }
 
@@ -258,24 +274,16 @@ export class TrafficSim {
     }
 
     if (node.type === 'light') {
-      const L = node.light;
-      const axisA = this._lightAxisGreen(node);
-      const axisB = axisA === 'x' ? 'y' : 'x';
-      const half = L.cycle / 2;
-      const cyclePos = (this.time + L.offset) % L.cycle;
-      const firstHalf = cyclePos < half;
-      const greenAxis = firstHalf ? axisA : axisB;
-      const greenLen = L.greenRatio * half;
-      const timeInHalf = firstHalf ? cyclePos : cyclePos - half;
-      const yellow = 2.5;
-      const inYellow = timeInHalf >= greenLen - yellow && timeInHalf < greenLen;
-      const axis = this._edgeAxis(edge, node);
-      if (axis !== greenAxis) {
-        return Math.min(distToEnd, 6);
-      }
-      // green for us, but stop at yellow unless we can't stop in time
-      if (inYellow && distToEnd > 10) return Math.min(distToEnd, 6);
-      return null;
+      // Shared phase authority (signals.js). The renderer calls the same
+      // function, so the indicator on the map cannot disagree with this.
+      this._lightAxisGreen(node); // resolve axis A once, before first use
+      const phase = phaseForAxis(node.light, this.time, this._edgeAxis(edge, node));
+      if (phase.go) return null;
+      // Yellow: hold if there is still room to stop, otherwise clear.
+      if (phase.yellow && distToEnd > 10) return Math.min(distToEnd, 6);
+      if (phase.yellow) return null;
+      // Red or all-red: hold at the line.
+      return Math.min(distToEnd, 6);
     }
 
     // plain intersection: yield to the right & to occupied zone
@@ -333,11 +341,12 @@ export class TrafficSim {
   }
 
   _lightAxisGreen(node) {
-    // dominant axis of the first edge = axis A (green first half of cycle)
+    // Axis A is the dominant axis of the first connected edge; it is green in
+    // the first half of the cycle. Resolved once and stored on the light so the
+    // renderer and the simulator read the same value.
     if (!node.light.axis) {
       const edges = [...node.edges].map(eid => this.net.edges.get(eid)).filter(Boolean);
-      if (edges.length >= 1) node.light.axis = this._edgeAxis(edges[0], node);
-      else node.light.axis = 'x';
+      node.light.axis = edges.length >= 1 ? this._edgeAxis(edges[0], node) : 'x';
     }
     return node.light.axis;
   }

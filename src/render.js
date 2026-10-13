@@ -4,6 +4,7 @@ import { BIOME } from './terrain.js';
 import { pointAt, clamp, dist, makeRng, splinePoints } from './core.js';
 import { ROAD_CLASS } from './roadNetwork.js';
 import { roadDimensions } from './roadProfiles.js';
+import { getLegacyPhase } from './signals.js';
 import { BUILDING_DEFS } from './economy.js';
 
 const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
@@ -409,15 +410,20 @@ export class Renderer {
     const [x, y] = this.worldToScreen(node.x, node.y);
 
     if (node.type === 'light') {
-      // green/red dot showing current phase for the x-axis
-      const L = node.light;
-      const half = L.cycle / 2;
-      const cyclePos = (state.simTime + L.offset) % L.cycle;
-      const axisA = node.light.axis || 'x';
-      const greenX = cyclePos < half ? axisA === 'x' : axisA !== 'x';
+      // Shared phase authority (signals.js) - the same function the simulator
+      // obeys. Previously this computed its own half-cycle comparison, ignoring
+      // greenRatio and yellow, so the dot could show green while traffic was
+      // held (EVIDENCE E04).
+      const phase = getLegacyPhase(node.light, state.simTime);
+      const axisA = node.light.axis === 'y' ? 'y' : 'x';
+      const onA = phase.axis === axisA;
+      const colour = phase.state === 'green' && onA ? '#3fae5a'
+        : phase.state === 'yellow' && onA ? '#e8b93f'
+        : '#e2574c';
+
       ctx.beginPath();
       ctx.arc(x, y, 4.5 * zoom, 0, Math.PI * 2);
-      ctx.fillStyle = greenX ? '#3fae5a' : '#e2574c';
+      ctx.fillStyle = colour;
       ctx.fill();
       ctx.lineWidth = 1.5 * zoom;
       ctx.strokeStyle = '#ffffff';
