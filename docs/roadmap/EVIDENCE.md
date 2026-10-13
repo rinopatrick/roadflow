@@ -110,6 +110,30 @@ Numbers derived directly from current formulas. The avenue/highway error is not 
 - DOM help is not a focus-trapped dialog; global shortcuts only exempt INPUT, not buttons/select/contenteditable. Canvas interaction has no equivalent keyboard construction path.
 - Near-global car scans in intersection/spawn logic and a linear A* frontier are scale risks, not measured performance failures yet.
 
+### E06 — Simulation randomness made the world non-reproducible (fixed in S01.1)
+
+Seeded terrain gave the impression of a deterministic game, but the simulation used `Math.random` directly: `Car.maxSpeed = 12 + Math.random() * 4` (assigned and never read), spawn colour, and lane choice. Graph IDs came from `uid()` (also `Math.random`), so every load produced different IDs. A seed therefore fixed geography only.
+
+S01.1 replaces these with an injectable seeded RNG (`TrafficSim(net, {rng})`), a world-owned `createIdSource()`, and removal of the unused `maxSpeed` field. Verified by a browser probe: two runs of seed 1 with identical input produce identical node IDs (`n1,n2,n4`), edge IDs (`e10,e11`) and buildings. `makeRng` gained `getState`/`setState` without changing its output sequence, protected by a golden-value test.
+
+### E07 — `traffic.time` advanced twice per frame (fixed in S01.1)
+
+The old loop did `simTime += dt; traffic.time = simTime; traffic.update(dt)`, and `TrafficSim.update` increments `this.time` again. Simulation time therefore ran at roughly double the requested rate, and the renderer's traffic-light indicator used a different clock from the one the simulator consulted.
+
+S01.1 makes `traffic.time` the single simulation clock, driven by the fixed-step accumulator; the renderer reads it directly. Verified in-browser: pause is frozen (0), and measured ratios are exactly 3.00x and 8.00x at the 3x and 8x settings, with 1x advancing about 1s per wall second.
+
+### E08 — Residual distance discarded at edge boundaries (fixed in S01.1)
+
+The route-advance step did `car.step++; car.s = 0`, discarding any overshoot. Over a long trip this silently shortens every journey and desynchronises vehicles from the travel time the router promised.
+
+S01.1 subtracts the completed edge length instead of zeroing, bounded by route length, with zero-length edges treated as invalid rather than looped. Verified: a car 5 wu before a boundary travelling 15 wu ends at s ~ 10 on the next edge, and path progress stays continuous across 12 transitions.
+
+### E09 — Segments shorter than 18 wu cannot be built (open, tracked)
+
+`NODE_SNAP = 18`, and `_snapPoint` is applied to the final control point, so a segment shorter than 18 wu snaps its far endpoint back onto the existing node. `addRoad` then returns `{nodeIds: [], edgeIds: []}` and creates nothing — a silent no-op rather than an explained rejection.
+
+Discovered in S01.1 while writing residual-distance tests with 10 wu edges. Recorded as `GAP-min-segment-length`, owned by S03.2. This will block short connector and slip-lane segments in S04.3 if unresolved.
+
 ## Prior Art: reuse decision
 
 | Existing component | Decision | Why |

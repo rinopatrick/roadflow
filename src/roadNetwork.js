@@ -20,7 +20,11 @@ const NODE_SNAP = 18;      // snap to existing node within this dist
 const EDGE_SNAP = 12;      // split existing edge within this dist
 
 export class RoadNetwork {
-  constructor() {
+  // ids: optional createIdSource(). When supplied, generated node/edge IDs are
+  // deterministic and survive save/load; without it, legacy uid() behaviour is
+  // kept so existing callers and tests are unaffected.
+  constructor(options = {}) {
+    this.ids = options.ids ?? null;
     this.clear();
   }
 
@@ -28,6 +32,11 @@ export class RoadNetwork {
     this.nodes = new Map();  // id -> node
     this.edges = new Map();  // id -> edge
     this.version = 0;        // bumped on any topology change (path invalidation)
+  }
+
+  /** Allocates an ID from the world source, or falls back to the legacy uid(). */
+  _newId(prefix) {
+    return this.ids ? this.ids.next(prefix) : uid();
   }
 
   // ---------- construction ----------
@@ -161,7 +170,7 @@ export class RoadNetwork {
   }
 
   _makeNode(x, y, type = 'plain') {
-    const id = uid();
+    const id = this._newId('n');
     const node = { id, x, y, type, edges: new Set(), light: null };
     if (type === 'light') node.light = { cycle: 14, offset: 0, greenRatio: 0.42 };
     this.nodes.set(id, node);
@@ -169,7 +178,7 @@ export class RoadNetwork {
   }
 
   _makeEdge(aId, bId, cls, midControls) {
-    const id = uid();
+    const id = this._newId('e');
     const controls = [[this.nodes.get(aId).x, this.nodes.get(aId).y], ...midControls, [this.nodes.get(bId).x, this.nodes.get(bId).y]];
     const edge = {
       id, a: aId, b: bId, cls, controls,
@@ -544,13 +553,16 @@ export class RoadNetwork {
     };
   }
 
-  static fromJSON(data) {
-    const net = new RoadNetwork();
+  static fromJSON(data, options = {}) {
+    const net = new RoadNetwork(options);
     for (const n of data.nodes) {
+      // Reserve loaded IDs so a later allocation cannot collide with them.
+      net.ids?.reserve(n.id);
       const node = { id: n.id, x: n.x, y: n.y, type: n.type, edges: new Set(), light: n.light, drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
       net.nodes.set(node.id, node);
     }
     for (const e of data.edges) {
+      net.ids?.reserve(e.id);
       const edge = { id: e.id, a: e.a, b: e.b, cls: e.cls, controls: e.controls, pts: null, cum: null, total: 0, segIdx: null, driveways: e.driveways || [], ring: e.ring || false, oneway: e.oneway || false };
       net.edges.set(edge.id, edge);
       net.nodes.get(e.a)?.edges.add(e.id);

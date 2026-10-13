@@ -136,6 +136,38 @@ test('save writes a parseable v1 snapshot', async () => {
   await page.screenshot({ path: `${shots}/03-saved.png` });
 });
 
+test('simulation clock honours pause and speed multipliers', async () => {
+  const { page } = game;
+  const readTime = () => page.evaluate(() => window.__rf.state.traffic.time);
+
+  // Pause must freeze simulation time completely.
+  await page.click('[data-speed="0"]');
+  await page.waitForTimeout(200);
+  const pausedAt = await readTime();
+  await page.waitForTimeout(600);
+  assert.equal(await readTime(), pausedAt, 'pause must freeze simulation time');
+
+  // 1x advances at roughly wall-clock rate. Previously the loop incremented
+  // traffic.time twice per frame, so it ran at about 2x.
+  await page.click('[data-speed="1"]');
+  const oneStart = await readTime();
+  await page.waitForTimeout(1000);
+  const oneDelta = (await readTime()) - oneStart;
+  assert.ok(oneDelta > 0.5 && oneDelta < 1.6,
+    `1x should advance about 1s per wall second, advanced ${oneDelta.toFixed(3)}`);
+
+  // 8x must be substantially faster than 1x.
+  await page.click('[data-speed="8"]');
+  const fastStart = await readTime();
+  await page.waitForTimeout(1000);
+  const fastDelta = (await readTime()) - fastStart;
+  assert.ok(fastDelta > oneDelta * 3,
+    `8x must outpace 1x: ${fastDelta.toFixed(3)} vs ${oneDelta.toFixed(3)}`);
+
+  // Restore normal speed for any later checks.
+  await page.click('[data-speed="1"]');
+});
+
 test('no console, page or request errors occurred', async () => {
   assert.deepEqual(game.errors, [], `browser errors:\n  ${game.errors.join('\n  ')}`);
   console.log(`browser artifacts: ${shots}`);

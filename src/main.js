@@ -1,6 +1,7 @@
 // Roadflow — main game controller.
 // A city builder focused on the fun part: roads and traffic.
-import { clamp, dist } from './core.js';
+import { clamp, dist, makeRng, createIdSource } from './core.js';
+import { createSimulationClock } from './simulationClock.js';
 import { Terrain } from './terrain.js';
 import { RoadNetwork, ROAD_CLASS } from './roadNetwork.js';
 import { TrafficSim } from './traffic.js';
@@ -15,6 +16,7 @@ const renderer = new Renderer(canvas);
 
 // ---- game state ----
 let terrain, net, traffic, eco;
+let ids = createIdSource();   // world-owned ID source (deterministic, collision-free)
 let speed = 1;
 let tool = 'road';
 let draft = [];            // road draft control points
@@ -27,13 +29,17 @@ function newGame(seed = (() => {
   return p ? (parseInt(p, 10) || 0) : (Math.random() * 1e9) | 0;
 })()) {
   terrain = new Terrain(seed);
-  net = new RoadNetwork();
-  traffic = new TrafficSim(net);
+  ids = createIdSource();
+  net = new RoadNetwork({ ids });
+  // Simulation randomness is seeded from the same seed as the terrain, so a
+  // seed fully determines the world rather than only its geography.
+  traffic = new TrafficSim(net, { rng: makeRng(seed) });
   eco = new Economy(net, terrain, seed);
   eco.onLevelUp = (lvl) => { toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn'); sfx.levelUp(); };
   eco.onToast = (m, k) => toast(m, k);
   simTime = 0;
   selected = null;
+  clock.reset();
   closeInspect();
   renderer.buildTerrain(terrain);
   updateBatchUI();
@@ -45,7 +51,15 @@ function loadFromSave() {
   if (!data) { newGame(); return; }
   terrain = data.terrain;
   net = data.net;
-  traffic = new TrafficSim(net);
+
+  // Adopt a fresh ID source and reserve every loaded ID, so construction after
+  // a load can never reissue an identifier that already exists in the save.
+  ids = createIdSource();
+  for (const id of net.nodes.keys()) ids.reserve(id);
+  for (const id of net.edges.keys()) ids.reserve(id);
+  net.ids = ids;
+
+  traffic = new TrafficSim(net, { rng: makeRng(data.terrain.seed) });
   traffic.time = data.simTime;
   eco = data.eco; // already deserialized by loadGame()
   eco.onLevelUp = (lvl) => { toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn'); sfx.levelUp(); };
@@ -53,6 +67,7 @@ function loadFromSave() {
   simTime = data.simTime;
   if (data.camera) renderer.cam = { ...renderer.cam, ...data.camera };
   selected = null;
+  clock.reset();
   closeInspect();
   renderer.buildTerrain(terrain);
   updateBatchUI();
@@ -448,19 +463,29 @@ function updateBatchUI() {
 }
 
 // ---------- main loop ----------
-let lastT = performance.now();
-function loop(now) {
-  const rawDt = Math.min((now - lastT) / 1000, 0.06);
-  lastT = now;
-  const dt = rawDt * speed;
+//
+// The clock converts wall time into a fixed number of STEP-sized ticks. This
+// replaces `dt = rawDt * speed`, which made physics depend on frame rate and
+// could inject one oversized step when the speed multiplier changed.
+//
+// `traffic.time` is the single simulation clock. The renderer reads it directly
+// instead of a second counter that could drift out of step.
+const clock = createSimulationClock((dt) => {
+  traffic.update(dt);
+  eco.update(dt, traffic, (from, to) => traffic.spawn(from, to));
+  eco.processReturns(dt, (from, to) => traffic.spawn(from, to));
+  eco.checkLevelUp();
+});
 
-  if (dt > 0) {
-    simTime += dt;
-    traffic.time = simTime;
-    traffic.update(dt);
-    eco.update(dt, traffic, (from, to) => traffic.spawn(from, to));
-    eco.processReturns(dt, (from, to) => traffic.spawn(from, to));
-    eco.checkLevelUp();
+let lastT = performance.now();
+
+function loop(now) {
+  const wallSeconds = (now - lastT) / 1000;
+  lastT = now;
+
+  const ticks = clock.advance(Math.max(0, wallSeconds), speed);
+  if (ticks > 0) {
+    simTime = traffic.time;
     updateBatchUI();
   }
 
@@ -477,6 +502,14 @@ function loop(now) {
 
   requestAnimationFrame(loop);
 }
+
+// Returning from a hidden tab must not replay the hidden period.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    clock.reset();
+    lastT = performance.now();
+  }
+});
 
 // ---------- boot ----------
 function boot() {
