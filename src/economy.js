@@ -18,6 +18,11 @@ export class Economy {
     this.net = net;
     this.terrain = terrain;
     this.rng = makeRng(seed);
+    // Separate stream for cosmetic values (building orientation, future
+    // variants/shading). Drawing appearance from the simulation stream would
+    // shift every later tripTimer draw, silently retuning demand pacing.
+    // CONTRACTS.md section 2 requires split simulation/cosmetic streams.
+    this.cosmeticRng = makeRng((seed ^ 0x9e3779b9) >>> 0);
     this.buildings = new Map();
     this.xp = 0;
     this.level = 1;
@@ -30,6 +35,19 @@ export class Economy {
 
   canPlace(type) { return (this.batch[type] || 0) > 0; }
 
+  /**
+   * Building ID from the world ID source.
+   *
+   * Read live from `net.ids` rather than cached in the constructor: a world's
+   * ID source is often attached to the network AFTER the economy is built
+   * (notably in the save/load path), so caching here would silently fall back
+   * to random IDs. Falls back to the legacy uid() only when a caller builds a
+   * bare RoadNetwork with no ID source, which existing tests rely on.
+   */
+  _newBuildingId() {
+    return this.net?.ids ? this.net.ids.next('b') : uid();
+  }
+
   // Place a building; attaches driveway to nearest road. Returns building or null.
   place(type, x, y) {
     if (!this.canPlace(type)) return null;
@@ -41,11 +59,16 @@ export class Economy {
     const driveway = this.net.attachDriveway(null, x, y);
     if (!driveway) return null;
     const b = {
-      id: uid(), type, x, y,
+      id: this._newBuildingId(), type, x, y,
       drivewayNode: driveway.id,
       residents: BUILDING_DEFS[type].residents,
       jobs: BUILDING_DEFS[type].jobs,
       tripTimer: 8 + this.rng() * 30,
+      // Cosmetic orientation from the separate cosmetic stream, so the
+      // simulation draw sequence is completely unaffected. Drawn from a seeded
+      // generator instead of Math.random so rendered output is reproducible
+      // for a given seed, which golden-image checks depend on.
+      rot: (this.cosmeticRng() - 0.5) * 0.5,
       reach: null,      // cached reachability {version, shopId, workId}
       happy: 1,
     };
@@ -190,6 +213,8 @@ export class Economy {
   static fromJSON(net, terrain, data) {
     const eco = new Economy(net, terrain);
     for (const b of data.buildings) eco.buildings.set(b.id, b);
+    // Reserve loaded IDs so a later placement cannot reuse one.
+    if (net?.ids) for (const b of data.buildings) net.ids.reserve(b.id);
     eco.xp = data.xp || 0;
     eco.level = data.level || 1;
     eco.batch = data.batch || { house: 4, shop: 2, factory: 1 };

@@ -168,6 +168,31 @@ test('simulation clock honours pause and speed multipliers', async () => {
   await page.click('[data-speed="1"]');
 });
 
+test('graph and building IDs are deterministic, not random', async () => {
+  // Regression guard for S01.1 follow-up: Economy.place() used uid()
+  // (Math.random), so building IDs changed every run. Asserting the ID FORMAT
+  // catches that path cheaply, without launching a second browser.
+  const { page } = game;
+  const ids = await page.evaluate(() => {
+    const s = window.__rf.state;
+    return {
+      nodes: [...s.net.nodes.keys()],
+      edges: [...s.net.edges.keys()],
+      buildings: [...s.eco.buildings.keys()],
+    };
+  });
+
+  assert.ok(ids.nodes.length > 0 && ids.edges.length > 0, 'world has a graph');
+  assert.ok(ids.buildings.length > 0, 'world has buildings from earlier tests');
+
+  assert.ok(ids.nodes.every(id => /^n\d+$/.test(id)),
+    `node IDs must be sequential, got ${ids.nodes.slice(0, 4).join(', ')}`);
+  assert.ok(ids.edges.every(id => /^e\d+$/.test(id)),
+    `edge IDs must be sequential, got ${ids.edges.slice(0, 4).join(', ')}`);
+  assert.ok(ids.buildings.every(id => /^b\d+$/.test(id)),
+    `building IDs must be sequential, got ${ids.buildings.join(', ')}`);
+});
+
 test('no console, page or request errors occurred', async () => {
   assert.deepEqual(game.errors, [], `browser errors:\n  ${game.errors.join('\n  ')}`);
   console.log(`browser artifacts: ${shots}`);
