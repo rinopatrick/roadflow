@@ -156,6 +156,24 @@ Fix: `rot` is drawn from a **separate cosmetic RNG stream** (`Economy.cosmeticRn
 
 `uid()` (Math.random-based) now has exactly one caller: the fallback in `RoadNetwork._newId`, used only when a `RoadNetwork` is constructed with no ID source. The game always supplies one (`new RoadNetwork({ ids })`), so node, edge and building IDs are deterministic in play. The fallback exists so the many existing tests and fixtures that construct a bare `new RoadNetwork()` keep working, and so legacy v1 IDs remain loadable. It is not dead code, but it is a legacy path — new world construction should always pass an ID source.
 
+### E01 — Return trips passed building IDs into a node routing API (FIXED in S01.2)
+
+`src/economy.js:processReturns` called `spawnCar(r.from, r.to)`. `_completeTrip` stored building IDs there; `TrafficSim.spawn` expects graph node IDs. A probe created a home/shop, completed a trip, advanced return time and captured the callback arguments: both were building IDs, neither existed in `net.nodes`. The pending return was removed anyway, so the failure was completely silent — no car, no error, no counter.
+
+**Fix (S01.2):** pending returns store building IDs and resolve them to CURRENT access nodes at dispatch time, because a building may be deleted, moved or re-attached during the dwell. A blocked spawn now retains the request and retries after 2 s instead of dropping it; a request whose origin, destination or access node no longer exists is cancelled exactly once with a recorded reason (`deletedOrigin` / `deletedDestination` / `noAccessNode`). A no-op `setTimeout(() => {}, 0)` was removed.
+
+**Verified in-browser** (seed 1, loop road, 2 houses + 1 shop, 3x): `t+32s` outbound completes → `trips=1, pendingReturns=1`; `t+40s` → **a car with `purpose: 'return'` is actually driving**, `pendingReturns=0`; `t+48s` next outbound starts. Zero cancellations, zero errors.
+
+**Observable consequence:** the 90-second soak changed from 10 trips / 2 cars / 0% congestion to 8 trips / 8 cars / 2% congestion. This is the expected effect of returns actually spawning cars, not a regression: more vehicles share the same network. The soak gate (`trips >= 1`) still passes.
+
+**Mutation-verified:** reverting `spawnCar(fromNode, toNode)` to `spawnCar(r.from, r.to)` fails 3 of 12 tests.
+
+### E13 — Pending returns are not persisted (open, tracked)
+
+`Economy.toJSON()` serializes buildings, xp, level, batch and totalTrips, but not `_pendingReturns`, `cancelledReturns` or `cancellationReasons`. `fromJSON` builds a fresh instance, so the queue starts empty. Saving during the dwell therefore drops the queued return trip — no crash and no corruption, the trip is simply lost.
+
+Owned by **S01.7**, which introduces the full snapshot including pending returns, clocks and RNG state. The plan explicitly defers this so S01.7 does not have to undo a partial implementation. Two characterization tests in `test/returnDispatch.test.js` pin today's behaviour, and `GAP-pending-returns-not-saved` tracks it in the ledger.
+
 ## Prior Art: reuse decision
 
 | Existing component | Decision | Why |

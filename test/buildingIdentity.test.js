@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createIdSource, makeRng } from '../src/core.js';
+import { readFileSync } from 'node:fs';
 import { RoadNetwork } from '../src/roadNetwork.js';
 import { Economy } from '../src/economy.js';
 
@@ -108,6 +109,99 @@ test('without an ID source, building creation still works (legacy path)', () => 
   assert.ok(house, 'legacy placement still succeeds');
   assert.ok(house.id, 'a building ID is still assigned');
   assert.ok(Number.isFinite(house.rot), 'rotation is still assigned on the legacy path');
+});
+
+// ------------------------------------------- legacy save ID interaction ---
+
+/** Loads the frozen v1 fixture the way main.js does, then plays on. */
+function loadLegacyAndPlay() {
+  const raw = JSON.parse(
+    readFileSync(new URL('./fixtures/legacy-v1.json', import.meta.url), 'utf8'));
+  const net = RoadNetwork.fromJSON(raw.net);
+  const eco = Economy.fromJSON(net, mockTerrain, raw.eco);
+
+  // main.js attaches a fresh source AFTER deserializing, then reserves.
+  const ids = createIdSource();
+  for (const id of net.nodes.keys()) ids.reserve(id);
+  for (const id of net.edges.keys()) ids.reserve(id);
+  for (const id of eco.buildings.keys()) ids.reserve(id);
+  net.ids = ids;
+  return { raw, net, eco, ids };
+}
+
+test('legacy v1 save keeps its original random IDs unchanged', () => {
+  const { raw, net, eco } = loadLegacyAndPlay();
+
+  // v1 IDs came from uid() (Math.random). They are preserved verbatim rather
+  // than rewritten: rewriting would break every reference inside the save.
+  assert.deepEqual([...eco.buildings.keys()].sort(),
+    raw.eco.buildings.map(b => b.id).sort(),
+    'loaded building IDs must equal the saved ones');
+  assert.deepEqual([...net.nodes.keys()].sort(),
+    raw.net.nodes.map(n => n.id).sort(),
+    'loaded node IDs must equal the saved ones');
+
+  // And they are NOT sequential, which is expected and correct.
+  assert.ok(!raw.eco.buildings.every(b => /^b\d+$/.test(b.id)),
+    'the fixture should still carry its original random IDs');
+});
+
+test('new buildings on a legacy save get sequential IDs without colliding', () => {
+  const { raw, net, eco } = loadLegacyAndPlay();
+
+  eco.batch.house = 5;
+  const added = eco.place('house', 200, 60);
+  assert.ok(added, 'placement on a legacy save succeeds');
+
+  // A played-on legacy save is therefore a MIX of random and sequential IDs.
+  // That is safe because IDs are opaque strings, but it means "IDs look
+  // sequential" is NOT a valid assertion for migrated saves - only for a
+  // freshly created world. This test pins that expectation.
+  assert.ok(/^b\d+$/.test(added.id), `new ID should be sequential, got ${added.id}`);
+
+  const legacyIds = new Set(raw.eco.buildings.map(b => b.id));
+  assert.ok(!legacyIds.has(added.id), 'new ID must not reuse a legacy ID');
+
+  const all = [...net.nodes.keys(), ...net.edges.keys(), ...eco.buildings.keys()];
+  assert.equal(new Set(all).size, all.length, 'no duplicate IDs anywhere in the world');
+});
+
+test('a reloaded save whose IDs are already sequential cannot be reused', () => {
+  // Adversarial case for the counter resetting to 1 on every load: the only
+  // thing preventing reuse is reserve(). Build a save that already contains
+  // sequential IDs, then reload it into a fresh counter.
+  const ids0 = createIdSource();
+  const net0 = new RoadNetwork({ ids: ids0 });
+  net0.addRoad([[-600, 0], [600, 0]], 'street');
+  const eco0 = new Economy(net0, mockTerrain, 1);
+  eco0.onToast = () => {};
+  eco0.batch.house = 5;
+  for (const x of [-350, -100, 150]) eco0.place('house', x, 60);
+
+  const save = { net: net0.toJSON(), eco: eco0.toJSON() };
+  const savedIds = new Set(save.eco.buildings.map(b => b.id));
+  assert.ok([...savedIds].every(id => /^b\d+$/.test(id)), 'save has sequential IDs');
+
+  const ids = createIdSource();            // counter restarts at 1
+  const net = RoadNetwork.fromJSON(save.net, { ids });
+  const eco = Economy.fromJSON(net, mockTerrain, save.eco);
+  for (const id of net.nodes.keys()) ids.reserve(id);
+  for (const id of net.edges.keys()) ids.reserve(id);
+  for (const id of eco.buildings.keys()) ids.reserve(id);
+
+  eco.batch.house = 10;
+  const added = [];
+  for (const x of [300, 400, 500]) {
+    const b = eco.place('house', x, 60);
+    if (b) added.push(b.id);
+  }
+
+  assert.ok(added.length > 0, 'placements succeeded');
+  for (const id of added) {
+    assert.ok(!savedIds.has(id), `new ID ${id} reused a loaded ID`);
+  }
+  const all = [...net.nodes.keys(), ...net.edges.keys(), ...eco.buildings.keys()];
+  assert.equal(new Set(all).size, all.length, 'no duplicates after reload and build');
 });
 
 test('cosmetic rotation does not perturb the simulation RNG stream', () => {
