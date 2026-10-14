@@ -75,6 +75,92 @@ test('a multi-point road does not create a spurious junction mid-path', () => {
     `a standalone curve must not create a junction, found ${junctions.length}`);
 });
 
+test('a multi-point road keeps its drawn shape, not just its endpoints', () => {
+  // Strengthened after a real defect: segmenting only at the endpoints collapsed
+  // an L-shape into one straight edge between its ends. The previous version of
+  // this test only checked that interior control points did not coincide with
+  // endpoints, which passed while the shape was wrong.
+  const net = new RoadNetwork();
+  net.addRoad([[0, 0], [300, 0], [300, 300]], 'street');
+  assertGraphConsistent(net, 'L-shape');
+
+  // The corner must be a real node, so the road actually bends there.
+  const corner = [...net.nodes.values()].find(n => Math.abs(n.x - 300) < 1 && Math.abs(n.y) < 1);
+  assert.ok(corner, 'the drawn corner exists as a node');
+
+  // Every sample must stay near the DRAWN path (x=0..300 at y=0, then y=0..300 at
+  // x=300). A collapsed edge would instead run diagonally through (150,150).
+  //
+  // Tolerance is measured, not guessed: Catmull-Rom overshoots a sharp 90-degree
+  // corner by up to 22.2 wu here, while the diagonal shortcut sits 150 wu away.
+  // 40 wu therefore separates "follows the drawn L" from "cut the diagonal"
+  // with a wide margin either way.
+  const TOLERANCE = 40;
+  const distanceToPath = (px, py) => {
+    const legs = [
+      [[0, 0], [300, 0]],
+      [[300, 0], [300, 300]],
+    ];
+    let best = Infinity;
+    for (const [[ax, ay], [bx, by]] of legs) {
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+      best = Math.min(best, Math.hypot(px - (ax + dx * t), py - (ay + dy * t)));
+    }
+    return best;
+  };
+
+  for (const e of net.edges.values()) {
+    for (const [x, y] of e.pts) {
+      const d = distanceToPath(x, y);
+      assert.ok(d <= TOLERANCE,
+        `sample (${x.toFixed(1)},${y.toFixed(1)}) is ${d.toFixed(1)} wu from the drawn path`);
+    }
+  }
+
+  // And the diagonal must NOT be a shortcut: no sample near the midpoint of a
+  // straight (0,0)->(300,300) line, which is what a collapsed edge would be.
+  for (const e of net.edges.values()) {
+    for (const [x, y] of e.pts) {
+      assert.ok(!(Math.abs(x - 150) < 40 && Math.abs(y - 150) < 40),
+        `sample (${x.toFixed(1)},${y.toFixed(1)}) suggests the road cut the diagonal`);
+    }
+  }
+});
+
+test('a bypass between two already-connected junctions is built, not dropped', () => {
+  // Regression for a silent no-op: with endpoints-only segmentation, a
+  // multi-point path whose two ends already shared an edge collapsed to one
+  // candidate edge, `edgeBetween` called it a duplicate, and NOTHING was built.
+  // A player drawing a bypass around a direct road would see no road appear.
+  const net = new RoadNetwork();
+  net.addRoad([[0, 0], [400, 0]], 'street');                       // direct road
+  const before = net.edges.size;
+
+  const res = net.addRoad([[0, 0], [0, 200], [400, 200], [400, 0]], 'street');
+  assertGraphConsistent(net, 'bypass');
+
+  assert.equal(res.reason, null, `the bypass must build (reason: ${res.reason})`);
+  assert.ok(res.edgeIds.length > 0, 'the bypass created edges');
+  assert.ok(net.edges.size > before,
+    `edge count must grow: ${before} -> ${net.edges.size}`);
+
+  // Both routes must now exist between the same two junctions.
+  const west = [...net.nodes.values()].find(n => Math.abs(n.x) < 1 && Math.abs(n.y) < 1);
+  const east = [...net.nodes.values()].find(n => Math.abs(n.x - 400) < 1 && Math.abs(n.y) < 1);
+  assert.ok(west && east, 'both junctions exist');
+  const between = [...net.edges.values()]
+    .filter(e => (e.a === west.id && e.b === east.id) || (e.a === east.id && e.b === west.id));
+  assert.equal(between.length, 1, 'the direct road still exists');
+
+  // And the bypass is a genuine second route of a different length.
+  const loopLength = [...net.edges.values()]
+    .filter(e => e !== between[0])
+    .reduce((acc, e) => acc + e.total, 0);
+  assert.ok(loopLength > 600, `the bypass is a real detour, total ${loopLength.toFixed(0)}`);
+});
+
 // ------------------------------------------------------- closed loops ---
 
 test('a four-corner loop drawn in one call closes into a ring', () => {

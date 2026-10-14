@@ -151,19 +151,17 @@ export class RoadNetwork {
 
     // 2. Decide where to segment.
     const closed = span < NODE_SNAP;
+
+    // Every clicked control point is a station, so the drawn shape becomes a
+    // chain of drivable edges with a bend node at each corner.
+    //
+    // Segmenting only at the ENDPOINTS was wrong: a multi-point path whose two
+    // ends already shared an edge collapsed into a single candidate edge,
+    // `edgeBetween` then treated it as a duplicate and the whole road was
+    // silently dropped. Drawing a bypass between two already-connected junctions
+    // built nothing at all.
     const candidates = [];
-    if (closed) {
-      for (let i = 0; i < n - 1; i++) candidates.push(i); // last duplicates the first
-      candidates.push(n - 1);
-    } else {
-      candidates.push(0, n - 1);
-    }
-    // Intermediate points that land on existing topology become junctions.
-    for (let i = 1; i < n - 1; i++) {
-      const snap = this._snapPoint(controls[i][0], controls[i][1]);
-      if (snap && !candidates.includes(i)) candidates.push(i);
-    }
-    candidates.sort((a, b) => a - b);
+    for (let i = 0; i < n; i++) candidates.push(i);
 
     const stations = candidates.map((i) => {
       const at = pointAt(pts, cum, ctrlArc[i]);
@@ -387,7 +385,12 @@ export class RoadNetwork {
 
   _makeNode(x, y, type = 'plain') {
     const id = this._newId('n');
-    const node = { id, x, y, type, edges: new Set(), light: null };
+    // `buildingIds` is the authority for access-node ownership. It is a LIST
+    // because two buildings on opposite sides of a road legitimately share one
+    // access node, and a single field let them overwrite each other (EVIDENCE
+    // E15). `drivewayFor` is kept in sync for legacy reads and v1 serialization
+    // but must never gate access.
+    const node = { id, x, y, type, edges: new Set(), light: null, buildingIds: [], drivewayFor: null };
     if (type === 'light') node.light = { cycle: 14, offset: 0, greenRatio: 0.42 };
     this.nodes.set(id, node);
     return node;
@@ -694,34 +697,64 @@ export class RoadNetwork {
     return { edgeId: best.edgeId, s: best.s, x: p.x, y: p.y };
   }
 
-  // Attach building to road: creates a driveway node by splitting the edge.
-  attachDriveway(buildingId, x, y) {
-    const near = this.nearestRoadPoint(x, y);
+  // Attach building access to the nearest road: creates a driveway node by
+  // splitting the edge, or reuses a nearby end node.
+  //
+  // `maxDist` bounds how far a NEW building may reach. It is a placement policy,
+  // so the caller supplies it (Economy uses ACCESS_MAX_DISTANCE).
+  attachDriveway(buildingId, x, y, maxDist = 400) {
+    const near = this.nearestRoadPoint(x, y, maxDist);
     if (!near) return null;
     let node;
     if (near.s < 20 || near.s > this.edges.get(near.edgeId).total - 20) {
-      // attach to nearest end node instead of splitting tiny edge
+      // attach to nearest end node instead of splitting a tiny edge
       const e = this.edges.get(near.edgeId);
       const a = this.nodes.get(e.a), b = this.nodes.get(e.b);
       node = dist(x, y, a.x, a.y) < dist(x, y, b.x, b.y) ? a : b;
     } else {
       node = this.splitEdge(near.edgeId, near.s);
+      if (!node) return null;
       node.type = 'driveway';
     }
-    node.drivewayFor = buildingId;
+    if (buildingId) this.claimDriveway(node, buildingId);
     return node;
   }
 
-  detachDriveway(nodeId) {
+  /**
+   * Records `buildingId` as an owner of an access node.
+   * Idempotent: claiming twice does not duplicate the entry.
+   */
+  claimDriveway(node, buildingId) {
+    if (!node || !buildingId) return node;
+    if (!Array.isArray(node.buildingIds)) node.buildingIds = [];
+    if (!node.buildingIds.includes(buildingId)) node.buildingIds.push(buildingId);
+    node.drivewayFor = node.buildingIds[0] ?? null;
+    return node;
+  }
+
+  /**
+   * Releases one owner (or every owner when `buildingId` is omitted).
+   *
+   * The access node is only merged away once NO building still uses it - that is
+   * the fix for the silent corruption where removing one of two buildings
+   * deleted a node the other still referenced.
+   */
+  detachDriveway(nodeId, buildingId) {
     const n = this.nodes.get(nodeId);
-    if (!n || n.type !== 'driveway') return;
-    n.drivewayFor = null;
-    // merge back if plain degree-2 passthrough
+    if (!n) return;
+    if (!Array.isArray(n.buildingIds)) n.buildingIds = [];
+
+    if (buildingId === undefined) n.buildingIds.length = 0;
+    else n.buildingIds = n.buildingIds.filter(id => id !== buildingId);
+
+    n.drivewayFor = n.buildingIds[0] ?? null;
     this._maybeRemoveDrivewayNode(n);
   }
 
   _maybeRemoveDrivewayNode(n) {
-    if (n.type !== 'driveway' || n.drivewayFor) return;
+    // An access node survives while ANY building still uses it.
+    if (n.type !== 'driveway') return;
+    if (Array.isArray(n.buildingIds) ? n.buildingIds.length > 0 : !!n.drivewayFor) return;
     if (n.edges.size !== 2) return;
     const [e1id, e2id] = [...n.edges];
     const e1 = this.edges.get(e1id), e2 = this.edges.get(e2id);
@@ -784,7 +817,7 @@ export class RoadNetwork {
   // resampling from controls.
   toJSON() {
     return {
-      nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
+      nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, buildingIds: n.buildingIds || [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
       edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
     };
   }
@@ -794,7 +827,7 @@ export class RoadNetwork {
     for (const n of data.nodes) {
       // Reserve loaded IDs so a later allocation cannot collide with them.
       net.ids?.reserve(n.id);
-      const node = { id: n.id, x: n.x, y: n.y, type: n.type, edges: new Set(), light: n.light, drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
+      const node = { id: n.id, x: n.x, y: n.y, type: n.type, edges: new Set(), light: n.light, buildingIds: Array.isArray(n.buildingIds) ? [...n.buildingIds] : [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
       net.nodes.set(node.id, node);
     }
     for (const e of data.edges) {

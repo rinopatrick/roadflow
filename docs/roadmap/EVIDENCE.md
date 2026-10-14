@@ -177,6 +177,69 @@ The 90-second soak agrees: **11 trips and 1% congestion with XP 35.1%**, versus 
 
 **Process note:** S01.4 and S01.5 both deferred this to S04.2 on the reasoning that S04.2 replaces the yielding model wholesale. That deferral was wrong for the deadlock itself — it is a correctness bug, not a modelling preference, and a two-line exemption plus five tests resolved it without conflicting with the planned connector work. The lesson: "a later stage rewrites this area" justifies avoiding a *redesign*, not tolerating a known deadlock.
 
+### E15 — Two buildings could destroy each other's road access (FIXED in S01.6)
+
+`RoadNetwork.attachDriveway` stored ONE owner in `node.drivewayFor`, so two buildings sharing an access node overwrote each other. Worse, removing the first building called `detachDriveway`, which cleared the flag and let `_maybeRemoveDrivewayNode` merge the two road halves and **delete the node while the second building still referenced it**. The second building was then permanently disconnected, silently.
+
+Reachable in ordinary play, because two buildings on **opposite sides** of the same road point are far enough apart to pass the overlap check but both project onto the same spot:
+
+```
+place house at (300, 60)   -> drivewayNode n4
+place shop  at (300, -60)  -> drivewayNode n4     (same node)
+node.drivewayFor = <shop>                          (house ownership overwritten)
+remove house               -> n4 deleted, shop.drivewayNode still points at n4
+```
+
+Observed directly: `south access node still exists? false`, `shop still in economy? true | its access node exists: false`.
+
+**Fix (S01.6):** ownership is a list, `node.buildingIds`. `claimDriveway` appends idempotently and `detachDriveway(nodeId, buildingId)` releases only that building's claim. The access node is merged away only once NO building still uses it. `drivewayFor` is kept in sync for legacy reads and v1 serialization but no longer gates access.
+
+`Economy.fromJSON` now **rebuilds ownership from the building records** rather than trusting the saved field, because the legacy singular value could already have been overwritten by this bug. Verified: loading a save whose `drivewayFor` was corrupted still gives both buildings a valid access node.
+
+**Mutation-verified:** restoring the single-owner behaviour fails 3 tests.
+
+### E16 — Live edits silently destroyed trips (FIXED in S01.6)
+
+Removing a road deleted every vehicle whose route referenced it. `_updatePos` marked the car dead when its edge vanished and `update` then dropped it from the map: no counter, no reason, no attempt to reroute. A destroyed trip was indistinguishable from a completed one.
+
+Also in the same area, `main.js:bulldoze` contained:
+
+```js
+} else if (n.type === 'driveway' && n.drivewayFor) {
+  eco.remove(n.drivewayFor);
+  eco.batch[eco.buildings.get ? 'house' : 'house']++; // always 'house'
+}
+```
+
+`eco.buildings.get` is always truthy, so the refund was **always a house**: demolishing a shop or factory via its access node refunded the wrong type. It also read the type *after* removing the building, when it was no longer available.
+
+**Fix (S01.6):**
+
+- `src/access.js` adds `reconcileTrafficAfterEdit(traffic, change)`. Cars on unaffected edges keep driving; a car whose edge was removed is **rerouted** when a legal path still exists; otherwise the trip is **cancelled exactly once with a recorded reason**. A car is never teleported onto an unrelated road to keep a count.
+- `TrafficSim.cancelCar(car, reason)` records `stats.cancelled` separately from `stats.trips` and **never awards XP**, so an edit cannot farm progress by deleting the road under a car.
+- `bulldoze` reads the building type BEFORE removing it, refunds the correct type, and reconciles traffic after both building and road demolition.
+
+Verified: 12 live-edit tests including reroute-and-complete, cancel-once, double-reconcile idempotence, unaffected cars progressing, and no-teleport. Mutation-verified: reverting the refund to always-`house` fails the browser test with `demolishing a shop must refund a SHOP, got batch.shop=2`.
+
+### E17 — A multi-point road between already-connected junctions built nothing (FIXED in S01.6)
+
+Found while writing the S01.6 fixtures, and a defect in my own S01.5 rewrite.
+
+S01.5's `addRoad` segmented only at the **endpoints** for a non-closed path, relying on intermediate points that happened to snap to existing topology. So a path like `[[0,0],[0,200],[400,200],[400,0]]` collapsed to a single candidate edge from `(0,0)` to `(400,0)`. When those two nodes **already shared an edge**, `edgeBetween` treated it as a duplicate and the entire road was silently dropped:
+
+```
+net.addRoad([[0,0],[400,0]])                              -> 1 edge
+net.addRoad([[0,0],[0,200],[400,200],[400,0]])            -> NOTHING (nodes 2, edges 1)
+```
+
+A player drawing a bypass between two already-connected junctions would see no road appear at all.
+
+**Fix (S01.6):** every clicked control point is a station, so the drawn shape becomes a chain of drivable edges with a bend node at each corner. The same fixture now gives 4 nodes / 4 edges, and the closed-loop case is unchanged because it already segmented at every point.
+
+**My S01.5 test was too weak to catch this.** It checked only that interior control points did not coincide with endpoints, which passed while the shape had collapsed. The replacement asserts that every sample stays within a **measured** 40 wu of the drawn L path — Catmull-Rom overshoots a sharp corner by 22.2 wu while the diagonal shortcut is 150 wu away — and that no sample enters the diagonal region.
+
+**Mutation-verified:** reverting to endpoints-only segmentation fails 7 tests.
+
 ### E06 — Simulation randomness made the world non-reproducible (fixed in S01.1)
 
 Seeded terrain gave the impression of a deterministic game, but the simulation used `Math.random` directly: `Car.maxSpeed = 12 + Math.random() * 4` (assigned and never read), spawn colour, and lane choice. Graph IDs came from `uid()` (also `Math.random`), so every load produced different IDs. A seed therefore fixed geography only.

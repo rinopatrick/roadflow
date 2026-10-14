@@ -284,6 +284,81 @@ test('the drawn signal colour matches the phase the simulator obeys', async () =
   await page.click('[data-speed="1"]');
 });
 
+test('bulldozing a building via its driveway refunds the correct type', async () => {
+  const { page } = game;
+
+  // Place a shop through the real UI, then bulldoze its ACCESS NODE (not the
+  // building itself). That is the branch that used to hard-code 'house':
+  //   eco.batch[eco.buildings.get ? 'house' : 'house']++
+  // which always evaluated to 'house', so demolishing a shop or factory
+  // refunded a house.
+  await page.evaluate(() => {
+    const s = window.__rf.state;
+    s.net.addRoad([[-400, 0], [400, 0]], 'street');
+    s.eco.batch.shop = 3;
+    s.eco.batch.house = 5;
+  });
+
+  await page.keyboard.press('7'); // shop tool
+  const target = await page.evaluate(() => {
+    const r = window.__rf.renderer;
+    const dpr = r._dpr;
+    const toCss = (x, y) => [
+      ((x - r.cam.x) * r.cam.zoom * dpr + r.canvas.width / 2) / dpr,
+      ((y - r.cam.y) * r.cam.zoom * dpr + r.canvas.height / 2) / dpr,
+    ];
+    const [sx, sy] = toCss(120, 70);
+    return { sx, sy };
+  });
+  await page.mouse.click(target.sx, target.sy);
+  await page.waitForTimeout(250);
+
+  const afterPlace = await page.evaluate(() => {
+    const s = window.__rf.state;
+    const shop = [...s.eco.buildings.values()].find(b => b.type === 'shop');
+    if (!shop) return null;
+    const node = s.net.nodes.get(shop.drivewayNode);
+    return {
+      shopId: shop.id,
+      batch: { ...s.eco.batch },
+      nodeWorld: node ? { x: node.x, y: node.y } : null,
+    };
+  });
+  assert.ok(afterPlace, 'the shop was placed');
+  assert.ok(afterPlace.nodeWorld, 'the shop has an access node');
+  assert.equal(afterPlace.batch.shop, 2, 'placing consumed one shop');
+
+  // Now bulldoze the access node.
+  await page.keyboard.press('9'); // bulldoze tool
+  const nodeScreen = await page.evaluate(([wx, wy]) => {
+    const r = window.__rf.renderer;
+    const dpr = r._dpr;
+    return [
+      ((wx - r.cam.x) * r.cam.zoom * dpr + r.canvas.width / 2) / dpr,
+      ((wy - r.cam.y) * r.cam.zoom * dpr + r.canvas.height / 2) / dpr,
+    ];
+  }, [afterPlace.nodeWorld.x, afterPlace.nodeWorld.y]);
+  await page.mouse.click(nodeScreen[0], nodeScreen[1]);
+  await page.waitForTimeout(250);
+
+  const afterBulldoze = await page.evaluate((shopId) => {
+    const s = window.__rf.state;
+    return {
+      batch: { ...s.eco.batch },
+      shopGone: !s.eco.buildings.has(shopId),
+      buildings: [...s.eco.buildings.values()].map(b => b.type),
+    };
+  }, afterPlace.shopId);
+
+  assert.equal(afterBulldoze.shopGone, true, 'the shop was demolished');
+  assert.equal(afterBulldoze.buildings.includes('shop'), false,
+    'no shop remains in the economy');
+  assert.equal(afterBulldoze.batch.shop, 3,
+    `demolishing a shop must refund a SHOP, got batch.shop=${afterBulldoze.batch.shop}`);
+  assert.equal(afterBulldoze.batch.house, 5,
+    `demolishing a shop must not refund a house, got batch.house=${afterBulldoze.batch.house}`);
+});
+
 test('no console, page or request errors occurred', async () => {
   assert.deepEqual(game.errors, [], `browser errors:\n  ${game.errors.join('\n  ')}`);
   console.log(`browser artifacts: ${shots}`);

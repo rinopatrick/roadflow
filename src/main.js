@@ -11,6 +11,7 @@ import { toast, openInspect, closeInspect, inspectOpen } from './ui.js';
 import { saveGame, loadGame, hasSave, exportGame } from './save.js';
 import { sfx, setAudioEnabled } from './audio.js';
 import { cityCongestion, formatCongestion } from './metrics.js';
+import { reconcileTrafficAfterEdit } from './access.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -268,6 +269,7 @@ function bulldoze(x, y) {
     if (dist(x, y, b.x, b.y) < BUILDING_DEFS[b.type].size * 0.8) {
       eco.remove(b.id);
       eco.batch[b.type] = (eco.batch[b.type] || 0) + 1;
+      reconcileTraffic([], [b.id]);
       sfx.bulldoze();
       updateBatchUI();
       return;
@@ -281,9 +283,20 @@ function bulldoze(x, y) {
       // bulldozing any part of a roundabout removes the whole thing
       net.removeRoundabout(n.id);
       toast('Roundabout removed.');
-    } else if (n.type === 'driveway' && n.drivewayFor) {
-      eco.remove(n.drivewayFor);
-      eco.batch[eco.buildings.get ? 'house' : 'house']++; // driveway buildings not in map; skip
+    } else if (n.type === 'driveway' && n.buildingIds?.length) {
+      // Read the type BEFORE removing, so the refund matches what was destroyed.
+      // The previous version wrote `eco.batch[eco.buildings.get ? 'house' : 'house']++`,
+      // which is always 'house': bulldozing a shop or factory via its driveway
+      // refunded a house.
+      const ownerId = n.buildingIds[0];
+      const owner = eco.buildings.get(ownerId);
+      if (owner) {
+        const refundType = owner.type;
+        eco.remove(ownerId);
+        eco.batch[refundType] = (eco.batch[refundType] || 0) + 1;
+        reconcileTraffic([], [ownerId]);
+        updateBatchUI();
+      }
     } else {
       net.removeNode(n.id);
     }
@@ -298,6 +311,9 @@ function bulldoze(x, y) {
     if (d < bd) { bd = d; best = e; }
   }
   if (best) {
+    // Capture affected edges/buildings BEFORE removing, so traffic can be
+    // reconciled instead of silently losing every car that used them.
+    const removedEdgeIds = [best.ring ? [...net.edges.values()].filter(e => e.ring).map(e => e.id) : best.id].flat();
     if (best.ring) {
       net.removeRoundabout(best.a);
       toast('Roundabout removed.');
@@ -305,7 +321,21 @@ function bulldoze(x, y) {
       net.removeEdge(best.id);
       toast('Road removed.');
     }
+    reconcileTraffic(removedEdgeIds);
     sfx.bulldoze();
+  }
+}
+
+/**
+ * Reconciles the traffic simulation after a live edit so no trip is silently
+ * lost: cars still on a legal route keep driving, others are rerouted, and the
+ * rest are cancelled once with a recorded reason.
+ */
+function reconcileTraffic(removedEdgeIds = [], removedBuildingIds = []) {
+  if (!removedEdgeIds.length && !removedBuildingIds.length) return;
+  const report = reconcileTrafficAfterEdit(traffic, { removedEdgeIds, removedBuildingIds });
+  if (report.cancelled.length) {
+    toast(`${report.cancelled.length} trip${report.cancelled.length === 1 ? '' : 's'} cancelled by the edit.`, 'warn');
   }
 }
 

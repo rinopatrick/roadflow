@@ -4,6 +4,7 @@
 // grant a batch of buildings to place.
 import { dist, uid, clamp, makeRng } from './core.js';
 import { findPath } from './pathfinding.js';
+import { evaluateBuildingPlacement, ACCESS_MAX_DISTANCE } from './access.js';
 
 export const BUILDING_DEFS = {
   house:   { residents: 4, jobs: 0, size: 22, label: 'House',   icon: '🏠' },
@@ -34,6 +35,8 @@ export class Economy {
     this.onToast = null;
     this._tripTimer = 0;
     this.totalTrips = 0;
+    /** Reason the most recent placement was refused, or null. */
+    this.lastPlacementReason = null;
     // Return-trip lifecycle. Requests are queued with BUILDING ids and only
     // resolved to access nodes at dispatch time, because a building can be
     // deleted, moved or re-attached to a different road during the dwell.
@@ -67,17 +70,31 @@ export class Economy {
   }
 
   // Place a building; attaches driveway to nearest road. Returns building or null.
+  //
+  // Validation is delegated to `evaluateBuildingPlacement` so the UI can ask the
+  // same question without mutating the world (EVIDENCE E16). The signature is
+  // unchanged for existing callers; `lastPlacementReason` carries the reason for
+  // callers that want to explain a refusal.
   place(type, x, y) {
-    if (!this.canPlace(type)) return null;
-    if (this.terrain && !this.terrain.isBuildable(x, y)) return null;
-    // overlap check
-    for (const b of this.buildings.values()) {
-      if (dist(x, y, b.x, b.y) < BUILDING_DEFS[b.type].size + BUILDING_DEFS[type].size) return null;
+    const verdict = evaluateBuildingPlacement(this._world(), { type, x, y });
+    if (!verdict.ok) {
+      this.lastPlacementReason = verdict.reason;
+      return null;
     }
-    const driveway = this.net.attachDriveway(null, x, y);
-    if (!driveway) return null;
+
+    const driveway = this.net.attachDriveway(null, x, y, ACCESS_MAX_DISTANCE);
+    if (!driveway) {
+      this.lastPlacementReason = 'could not attach access to a road';
+      return null;
+    }
+
+    // The ID is allocated only once the world has accepted the placement, so a
+    // refusal never consumes an identifier.
+    const id = this._newBuildingId();
+    this.net.claimDriveway(driveway, id);
+
     const b = {
-      id: this._newBuildingId(), type, x, y,
+      id, type, x, y,
       drivewayNode: driveway.id,
       residents: BUILDING_DEFS[type].residents,
       jobs: BUILDING_DEFS[type].jobs,
@@ -90,17 +107,24 @@ export class Economy {
       reach: null,      // cached reachability {version, shopId, workId}
       happy: 1,
     };
-    driveway.drivewayFor = b.id;
     this.buildings.set(b.id, b);
     this.batch[type]--;
     this.net.version++;
+    this.lastPlacementReason = null;
     return b;
+  }
+
+  /** The shape `evaluateBuildingPlacement` expects. */
+  _world() {
+    return { net: this.net, terrain: this.terrain, eco: this };
   }
 
   remove(id) {
     const b = this.buildings.get(id);
     if (!b) return;
-    this.net.detachDriveway(b.drivewayNode);
+    // Release only THIS building's claim. The access node survives while any
+    // other building still uses it (EVIDENCE E15).
+    this.net.detachDriveway(b.drivewayNode, b.id);
     this.buildings.delete(id);
     this.net.version++;
   }
@@ -272,6 +296,19 @@ export class Economy {
     for (const b of data.buildings) eco.buildings.set(b.id, b);
     // Reserve loaded IDs so a later placement cannot reuse one.
     if (net?.ids) for (const b of data.buildings) net.ids.reserve(b.id);
+
+    // Rebuild access-node ownership from the BUILDING records rather than
+    // trusting the saved field. The legacy singular `drivewayFor` could already
+    // have been overwritten by the shared-node bug, so the buildings are the
+    // only reliable source (EVIDENCE E15).
+    if (net?.nodes) {
+      for (const n of net.nodes.values()) { n.buildingIds = []; n.drivewayFor = null; }
+      for (const b of eco.buildings.values()) {
+        const node = net.nodes.get(b.drivewayNode);
+        if (node) net.claimDriveway(node, b.id);
+      }
+    }
+
     eco.xp = data.xp || 0;
     eco.level = data.level || 1;
     eco.batch = data.batch || { house: 4, shop: 2, factory: 1 };

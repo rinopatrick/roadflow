@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S01.6",
+  "nextTask": "S01.7",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -591,13 +591,74 @@
     },
     {
       "id": "S01.6",
-      "status": "pending",
+      "status": "done",
       "dependsOn": [
         "S01.5"
       ],
       "file": "stages/01-foundation.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/access.test.js",
+          "exitCode": 0,
+          "result": "tests 20, pass 20, fail 0. Before the fix the file could not import (no access.js) and the shared-node corruption was reproduced directly: two buildings 120 wu apart both attached to node n4, the second overwrote drivewayFor, and removing the first DELETED n4 while the shop still referenced it. Covers shared-node ownership, survival of the remaining building, release when all owners are gone, owner reporting, pure evaluation with 6 distinct reasons, ACCESS_MAX_DISTANCE enforcement, evaluation/place agreement in both directions, place keeping its building-or-null signature, and ownership rebuild from building records on legacy load.",
+          "artifact": null
+        },
+        {
+          "command": "node --test test/live-edit.test.js",
+          "exitCode": 0,
+          "result": "tests 12, pass 12, fail 0. Covers reroute-when-a-path-remains, the rerouted car completing normally, cancel-once-with-reason when no route remains, no XP on cancellation, double-reconcile idempotence, unaffected cars keeping progress, no-op edits changing nothing, demolished origin and destination buildings, cancelled tracked separately from completed, every cancellation carrying a reason, and no teleporting.",
+          "artifact": null
+        },
+        {
+          "command": "node --test test/construction.test.js",
+          "exitCode": 0,
+          "result": "tests 22, pass 22. Two new tests plus a strengthened one: the drawn L shape must actually bend (measured 40 wu tolerance vs 22.2 wu spline overshoot vs 150 wu to the diagonal), and a bypass between two already-connected junctions must build.",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 223, pass 223, fail 0. Was 189 before this task; +34 new. No existing test weakened or removed.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 11, pass 11. New test bulldozes a shop via its access node through the real UI and asserts batch.shop increments while batch.house does not.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 11 trips, 1% congestion, XP 35.0957%, matching the S01.5b result, so access and live-edit changes did not disturb normal traffic.",
+          "artifact": "artifacts/soak-1791956904108"
+        },
+        {
+          "command": "mutation A: refund always house",
+          "exitCode": 1,
+          "result": "1 browser failure: \"demolishing a shop must refund a SHOP, got batch.shop=2\".",
+          "artifact": null
+        },
+        {
+          "command": "mutation B: single drivewayFor owner",
+          "exitCode": 1,
+          "result": "3 access test failures. Restoring returned to 0.",
+          "artifact": null
+        },
+        {
+          "command": "mutation C: endpoints-only road segmentation",
+          "exitCode": 1,
+          "result": "7 failures across construction and live-edit tests. Restoring returned to 0.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Created: src/access.js (evaluateBuildingPlacement, reconcileTrafficAfterEdit, ACCESS_MAX_DISTANCE, PLACEMENT_REASON), test/access.test.js, test/live-edit.test.js. Modified: src/roadNetwork.js (buildingIds list, claimDriveway, detachDriveway with owner, access-node lifetime, always segment at every control point), src/economy.js (place delegates to evaluateBuildingPlacement, lastPlacementReason, remove passes buildingId, fromJSON rebuilds ownership), src/traffic.js (cancelCar with stats.cancelled, never awards XP), src/main.js (bulldoze reads type before removing, refunds correct type, reconciles traffic after demolition).",
+        "Economy.place keeps its building-or-null signature; validation moved to a pure function so S02 can preview a placement without mutating the world. The building ID is allocated only after the world accepts, so a refusal never consumes an identifier.",
+        "DISCOVERED AND FIXED a defect in my own S01.5 addRoad rewrite (E17): non-closed multi-point paths segmented only at the endpoints, so a bypass between two already-connected junctions collapsed to one candidate edge and was silently dropped. Every control point is now a station. My S01.5 shape test was too weak to catch it and has been replaced with a measured-tolerance check.",
+        "GAP-min-segment-length remains half-closed: short segments are rejected with an explicit reason but still cannot be built. Owned by S03.2, consumed by S04.3.",
+        "The always-house refund was a latent bug in main.js that no test covered; it now has a browser test that demolishes a shop through its access node."
+      ]
     },
     {
       "id": "S01.7",
