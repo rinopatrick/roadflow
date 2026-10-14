@@ -725,13 +725,63 @@
     },
     {
       "id": "S02.1",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [
         "S01.7"
       ],
       "file": "stages/02-experience.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/browser/ui.js (before any implementation)",
+          "exitCode": 1,
+          "result": "RED: tests 12, pass 2, fail 10. Every new guard was observed failing for the right reason first: \"expected exactly the ui.css stylesheet, got \" (no stylesheet existed), \"--accent (#2bb8e8) must equal UI_TOKENS.accent (#146b68)\", \"#toolbar still contains emoji: U+1F6E3\", \"road: focus ring must be 2px, got 1px\", \"tool transitions must be removed, got 0.14s\", \"compact: no tool may be clipped offscreen (overflow 163px)\", \"speed 0: renders an inline svg icon\", \"road: buttons keep visible text\". Two failures were defects in the new harness rather than the product and were fixed before implementing: blur() does not reset the sequential focus starting point (Tab resumed mid-dock), and the depleted-stock case paused the clock while stock changes are published by the running loop.",
+          "artifact": "artifacts/before-s02.1 (32 captures, pre-change UI)"
+        },
+        {
+          "command": "node --test test/browser/smoke.js (immediately after moving the CSS out of index.html, before any token change)",
+          "exitCode": 0,
+          "result": "tests 17, pass 17, fail 0. This is the behaviour-neutral checkpoint step 1 requires: relocating 149 lines of CSS into src/ui.css and linking it changed no observable behaviour.",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 265, pass 265, fail 0. Count unchanged from S01.7: S02.1 adds no unit tests because it changes no simulation module. The modules it adds are DOM-only (ui.css) or DOM-free leaf modules (icons.js, uiTokens.js); render.js changes only which constant supplies a preview colour.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 30, pass 30, fail 0. 17 legacy smoke cases plus 13 new in test/browser/ui.js. The legacy suite is unchanged and still passes against the tokenised UI, including the cases that read inventory badges and the HUD.",
+          "artifact": "artifacts/after-s02.1"
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 11 trips, 1% congestion, XP 35.0957%, identical to S01.6 and S01.7. The palette and icon change did not disturb normal traffic.",
+          "artifact": "artifacts/soak-1791964922382"
+        },
+        {
+          "command": "node scripts/mutate-s021.mjs (8 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "7 of 8 caught. A drop prefers-reduced-motion -> 1 failure. B focus ring 1px/no offset -> 1 failure. C active tool text --ink instead of --surface-raised -> NO FAILURE (see below). D remove --focus -> 3 failures. E emoji back into a tool icon -> 2 failures. F badges stop following real stock -> 1 failure. G uiTokens.accent drifts from --accent -> 1 failure. H remove the toolbar text label -> 2 failures. Mutation C was INEFFECTIVE - the 'wrong half' category: the test asserted the token PAIR (--surface-raised on --accent) but nothing asserted that the active button consumed those tokens. Two computed-style assertions were added (active background == --accent, active colour == --surface-raised) and both C and a new C2 (active fill drops the accent) then failed as required.",
+          "artifact": null
+        },
+        {
+          "command": "RF_RUN_ID=after-s02.1 node --test test/browser/ui.js (capture pass)",
+          "exitCode": 0,
+          "result": "63 artifacts: 60 tool-state captures (10 tools x active/hover/focus x desktop 1440x900 and compact 1024x768), 2 full-page captures and 1 inspector capture. Clock frozen at speed 0 so captures are comparable; file names carry scene, viewport, DPR and seed. Inspected: dock unclipped at 1024x768 (was 163px of overflow before), focus ring visible on every tool, depleted House badge legible, inspector shows icon + 'House' with 'Reach shop: No'.",
+          "artifact": "artifacts/after-s02.1"
+        }
+      ],
+      "notes": [
+        "Created src/ui.css (149 lines moved verbatim out of index.html, then tokenised), src/uiTokens.js, src/icons.js, test/browser/ui.js, scripts/mutate-s021.mjs. Modified index.html (inline style block replaced by a stylesheet link; hidden #batch container and every emoji control removed; aria-labels on the icon-only controls), src/main.js (TOOLS carry icon ids, toolbar markup plus aria-pressed, updateBatchUI reduced to one stock source, inspector titles and rows without emoji, mountIcons on boot), src/ui.js (openInspect takes an optional icon id and sets the title as a text node so a label can never become markup), src/render.js (26 canvas preview/label colours now read uiTokens), src/economy.js (BUILDING_DEFS.icon removed: no reader left), package.json (browser runner includes test/browser/ui.js).",
+        "Token decision to review: --accent moved from cyan #2bb8e8 to teal #146b68 and active controls now use --surface-raised text on it (5.76:1). Five canvas-facing values are duplicated in uiTokens.js and asserted equal to the CSS custom properties, because a canvas cannot read a CSS variable. Deliberately NOT shared: --warning and the renderer's selection green, which are map-only highlights judged against terrain.",
+        "Preserved on purpose: the 10 tools and their 1-0 shortcuts, every data-tool and data-speed value, badge ids, all DOM ids listed in CONTRACTS.md section 1, and all gameplay data. Nothing in the simulation was touched.",
+        "Two scope notes. (i) The plan's optional icon ids: save, load, close and help were added for existing controls; undo and layers were NOT added because no such control exists yet, and DESIGN.md section 1 forbids an inert future button. (ii) --line against the map grass measures 1.34:1. It is reported as informational rather than gated, because the 1px panel edge is decorative and the panel boundary is carried by the drop shadow; flagged for the human visual review.",
+        "Deferred to its owning task: visible speed labels Pause/1x/3x/8x are S02.2 item 4 (S02.1 gives them non-emoji aria-labels only), and the layer toggles with legends are S02.2 item 3. The compact dock now fits by tightening padding at <=1100px rather than by hiding tools.",
+        "STATUS: implementation and every required check in the task's Verify line pass. The task remains in_progress for one reason only - the stage's Approval clause (operator sign-off on the icon language and the base tokens) is not yet recorded, and the stage says not to accept screenshot differences automatically. S02.2 must not start until that sign-off is entered here. The full DESIGN.md section 7 rubric score belongs to the R1 gate at S02.6."
+      ]
     },
     {
       "id": "S02.2",

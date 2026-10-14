@@ -7,9 +7,9 @@ import { findPath } from './pathfinding.js';
 import { evaluateBuildingPlacement, ACCESS_MAX_DISTANCE } from './access.js';
 
 export const BUILDING_DEFS = {
-  house:   { residents: 4, jobs: 0, size: 22, label: 'House',   icon: '🏠' },
-  shop:    { residents: 0, jobs: 2, size: 26, label: 'Shop',    icon: '🏪' },
-  factory: { residents: 0, jobs: 6, size: 34, label: 'Factory', icon: '🏭' },
+  house:   { residents: 4, jobs: 0, size: 22, label: 'House' },
+  shop:    { residents: 0, jobs: 2, size: 26, label: 'Shop' },
+  factory: { residents: 0, jobs: 6, size: 34, label: 'Factory' },
 };
 
 export const LEVEL_XP = (lvl) => 300 * lvl * lvl; // cumulative XP for level `lvl`

@@ -8,6 +8,7 @@ import { TrafficSim } from './traffic.js';
 import { Economy, BUILDING_DEFS } from './economy.js';
 import { Renderer } from './render.js';
 import { toast, openInspect, closeInspect, inspectOpen } from './ui.js';
+import { icon, mountIcons } from './icons.js';
 import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, autosave, importGame, exportGame, exportFilename, AUTOSAVE_INTERVAL_MS } from './save.js';
 import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { cityCongestion, formatCongestion } from './metrics.js';
@@ -129,16 +130,16 @@ function loadFromSave({ source = 'manual' } = {}) {
 
 // ---------- tools ----------
 const TOOLS = [
-  { id: 'road', icon: '🛣️', label: 'Road', key: '1' },
-  { id: 'avenue', icon: '🛤️', label: 'Avenue', key: '2' },
-  { id: 'highway', icon: '🏁', label: 'Highway', key: '3' },
-  { id: 'roundabout', icon: '⭕', label: 'Roundabout', key: '4' },
-  { id: 'light', icon: '🚦', label: 'Traffic light', key: '5' },
-  { id: 'house', icon: '🏠', label: 'House', key: '6' },
-  { id: 'shop', icon: '🏪', label: 'Shop', key: '7' },
-  { id: 'factory', icon: '🏭', label: 'Factory', key: '8' },
-  { id: 'bulldoze', icon: '💥', label: 'Bulldoze', key: '9' },
-  { id: 'select', icon: '🔍', label: 'Select', key: '0' },
+  { id: 'road', icon: 'road', label: 'Road', key: '1' },
+  { id: 'avenue', icon: 'avenue', label: 'Avenue', key: '2' },
+  { id: 'highway', icon: 'highway', label: 'Highway', key: '3' },
+  { id: 'roundabout', icon: 'roundabout', label: 'Roundabout', key: '4' },
+  { id: 'light', icon: 'light', label: 'Traffic light', key: '5' },
+  { id: 'house', icon: 'house', label: 'House', key: '6' },
+  { id: 'shop', icon: 'shop', label: 'Shop', key: '7' },
+  { id: 'factory', icon: 'factory', label: 'Factory', key: '8' },
+  { id: 'bulldoze', icon: 'bulldoze', label: 'Bulldoze', key: '9' },
+  { id: 'select', icon: 'select', label: 'Select', key: '0' },
 ];
 
 function buildToolbar() {
@@ -153,8 +154,12 @@ function buildToolbar() {
     const btn = document.createElement('button');
     btn.className = 'tool-btn' + (t.id === tool ? ' active' : '');
     btn.dataset.tool = t.id;
+    btn.type = 'button';
+    btn.setAttribute('aria-pressed', String(t.id === tool));
     const isBuilding = t.id === 'house' || t.id === 'shop' || t.id === 'factory';
-    btn.innerHTML = `<span class="icon">${t.icon}</span><span>${t.label}</span>${isBuilding ? `<span class="tool-count" id="badge_${t.id}">0</span>` : ''}`;
+    // Visible text plus a decorative icon; the accessible name is the label
+    // followed by the stock count, never the glyph.
+    btn.innerHTML = `${icon(t.icon)}<span class="label">${t.label}</span>${isBuilding ? `<span class="tool-count" id="badge_${t.id}">0</span>` : ''}`;
     btn.title = `${t.label} (${t.key})`;
     btn.addEventListener('click', () => setTool(t.id));
     bar.appendChild(btn);
@@ -165,7 +170,11 @@ function setTool(id) {
   tool = id;
   draft = [];
   canvas.className = 'tool-' + id;
-  document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('active', b.dataset.tool === id));
+  document.querySelectorAll('.tool-btn').forEach(b => {
+    const on = b.dataset.tool === id;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
   sfx.click();
 }
 
@@ -262,7 +271,7 @@ function placeRoundabout(x, y) {
   const res = net.makeRoundabout(n.id);
   if (!res) { toast('That junction can\'t take a roundabout.', 'warn'); return; }
   sfx.place();
-  toast('⭕ Roundabout built — traffic circulates counterclockwise.');
+  toast('Roundabout built — traffic circulates counterclockwise.');
 }
 
 function placeLight(x, y) {
@@ -281,7 +290,7 @@ function placeLight(x, y) {
 
 function openLightInspect(n) {
   const L = n.light;
-  openInspect('🚦 Traffic Light', `
+  openInspect('Traffic light', `
     <div class="row"><span>Connections</span><span class="v">${n.edges.size}</span></div>
     <label>Cycle length <span id="vCycle">${L.cycle.toFixed(0)}s</span></label>
     <input type="range" data-key="cycle" min="8" max="60" step="1" value="${L.cycle}">
@@ -289,12 +298,12 @@ function openLightInspect(n) {
     <input type="range" data-key="greenRatio" min="0.25" max="0.6" step="0.01" value="${L.greenRatio}">
     <label>Offset <span id="vOffset">${L.offset.toFixed(0)}s</span></label>
     <input type="range" data-key="offset" min="0" max="${L.cycle}" step="0.5" value="${L.offset}">
-    <label style="color:var(--text-dim);font-size:11px">Green wave: match offsets along an artery.</label>
+    <label style="color:var(--muted);font-size:12px">Green wave: match offsets along an artery.</label>
   `, (key, val) => {
     if (key === 'cycle') { L.cycle = val; document.getElementById('vCycle').textContent = val + 's'; }
     if (key === 'greenRatio') { L.greenRatio = val; document.getElementById('vGreen').textContent = (val * 100).toFixed(0) + '%'; }
     if (key === 'offset') { L.offset = val; document.getElementById('vOffset').textContent = val + 's'; }
-  });
+  }, 'light');
 }
 
 function placeBuilding(type, x, y) {
@@ -410,14 +419,14 @@ function select(x, y) {
       const def = BUILDING_DEFS[b.type];
       const reachShop = b.type === 'house' ? !!eco.findDestination(b, 'shop') : '—';
       const reachWork = b.type === 'house' ? !!eco.findDestination(b, 'factory') : '—';
-      openInspect(def.icon + ' ' + def.label, `
+      openInspect(def.label, `
         <div class="row"><span>Position</span><span class="v">${b.x.toFixed(0)}, ${b.y.toFixed(0)}</span></div>
         ${b.residents ? `<div class="row"><span>Residents</span><span class="v">${b.residents}</span></div>` : ''}
         ${b.jobs ? `<div class="row"><span>Jobs</span><span class="v">${b.jobs}</span></div>` : ''}
         ${b.type === 'house' ? `
-          <div class="row"><span>Reach shop</span><span class="v">${reachShop ? '✅' : '❌'}</span></div>
-          <div class="row"><span>Reach work</span><span class="v">${reachWork ? '✅' : '❌'}</span></div>` : ''}
-      `);
+          <div class="row"><span>Reach shop</span><span class="v">${reachShop ? 'Yes' : 'No'}</span></div>
+          <div class="row"><span>Reach work</span><span class="v">${reachWork ? 'Yes' : 'No'}</span></div>` : ''}
+      `, undefined, b.type);
       return;
     }
   }
@@ -425,12 +434,12 @@ function select(x, y) {
   if (n && dist(x, y, n.x, n.y) < 16 / renderer.cam.zoom) {
     selected = { kind: 'node', id: n.id };
     if (n.type === 'light') { openLightInspect(n); return; }
-    const names = { plain: 'Junction', roundabout: '⭕ Roundabout', driveway: 'Driveway', light: '🚦 Traffic light' };
+    const names = { plain: 'Junction', roundabout: 'Roundabout', driveway: 'Driveway', light: 'Traffic light' };
     if (n.isRing) {
-      openInspect('⭕ Roundabout', `
+      openInspect('Roundabout', `
         <div class="row"><span>Ring connections</span><span class="v">${n.edges.size}</span></div>
         <div class="row"><span>Type</span><span class="v">One-way, counterclockwise</span></div>
-      `);
+      `, undefined, 'roundabout');
       return;
     }
     openInspect(names[n.type] || 'Node', `
@@ -540,27 +549,15 @@ function updateHud(force) {
 }
 
 function updateBatchUI() {
-  const h = eco.batch.house || 0;
-  const s = eco.batch.shop || 0;
-  const f = eco.batch.factory || 0;
-  const elH = document.getElementById('bHouse'); if (elH) elH.textContent = h;
-  const elS = document.getElementById('bShop'); if (elS) elS.textContent = s;
-  const elF = document.getElementById('bFactory'); if (elF) elF.textContent = f;
-
-  const bgH = document.getElementById('badge_house');
-  if (bgH) {
-    bgH.textContent = h;
-    bgH.closest('.tool-btn')?.classList.toggle('depleted', h === 0);
-  }
-  const bgS = document.getElementById('badge_shop');
-  if (bgS) {
-    bgS.textContent = s;
-    bgS.closest('.tool-btn')?.classList.toggle('depleted', s === 0);
-  }
-  const bgF = document.getElementById('badge_factory');
-  if (bgF) {
-    bgF.textContent = f;
-    bgF.closest('.tool-btn')?.classList.toggle('depleted', f === 0);
+  // One stock source: the toolbar badges are the only inventory display. The
+  // hidden #batch container that duplicated these numbers was removed with its
+  // last reader.
+  for (const type of ['house', 'shop', 'factory']) {
+    const badge = document.getElementById('badge_' + type);
+    if (!badge) continue;
+    const stock = eco.batch[type] || 0;
+    badge.textContent = stock;
+    badge.closest('.tool-btn')?.classList.toggle('depleted', stock === 0);
   }
 }
 
@@ -617,6 +614,7 @@ function boot() {
   renderer.resize();
   window.addEventListener('resize', () => renderer.resize());
   buildToolbar();
+  mountIcons();
   setTool('road');
 
   // Recovery is only offered when a VALID backup exists, so the button cannot

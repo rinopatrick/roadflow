@@ -1,4 +1,6 @@
 // UI helpers — toasts, inspect panel.
+import { icon } from './icons.js';
+
 export function toast(msg, kind = '') {
   const box = document.getElementById('toasts');
   const el = document.createElement('div');
@@ -10,9 +12,13 @@ export function toast(msg, kind = '') {
   while (box.children.length > 4) box.firstChild.remove();
 }
 
-export function openInspect(title, bodyHTML, onChange) {
+export function openInspect(title, bodyHTML, onChange, iconId = null) {
   const panel = document.getElementById('inspect');
-  document.getElementById('insTitle').textContent = title;
+  const heading = document.getElementById('insTitle');
+  // The icon is trusted markup from icons.js; the title is inserted as text so
+  // a label can never become markup.
+  heading.innerHTML = iconId ? icon(iconId) : '';
+  heading.appendChild(document.createTextNode(title));
   const body = document.getElementById('insBody');
   body.innerHTML = bodyHTML;
   panel.classList.add('open');
