@@ -6,6 +6,7 @@ import { ROAD_CLASS } from './roadNetwork.js';
 import { roadDimensions } from './roadProfiles.js';
 import { getLegacyPhase } from './signals.js';
 import { BUILDING_DEFS } from './economy.js';
+import { UI_TOKENS, alpha } from './uiTokens.js';
 
 const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
 const TERRAIN_RES = 1024;    // offscreen resolution
@@ -426,14 +427,14 @@ export class Renderer {
       ctx.fillStyle = colour;
       ctx.fill();
       ctx.lineWidth = 1.5 * zoom;
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = UI_TOKENS.surfaceRaised;
       ctx.stroke();
     }
   }
 
-  // Trafficity-style in-world diegetic badge: white rounded pill with subtle shadow and border
+  // In-world diegetic badge: white rounded pill with subtle shadow and border
   _drawPillBadge(ctx, sx, sy, parts) {
-    // parts = [{ text: '$200', bold: true }, { text: 'Parallel', color: '#6c7380' }]
+    // parts = [{ text: '$200', bold: true }, { text: 'Parallel', color: UI_TOKENS.muted }]
     ctx.save();
     ctx.font = '500 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     let totalW = 16;
@@ -453,7 +454,7 @@ export class Renderer {
     ctx.shadowOffsetY = 2;
 
     // white background
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = UI_TOKENS.surfaceRaised;
     ctx.beginPath();
     ctx.roundRect(x, y, totalW, h, r);
     ctx.fill();
@@ -461,7 +462,7 @@ export class Renderer {
     // subtle border
     ctx.shadowColor = 'transparent';
     ctx.lineWidth = 1;
-    ctx.strokeStyle = parts.some(p => p.error) ? 'rgba(239, 68, 68, 0.4)' : 'rgba(0, 0, 0, 0.12)';
+    ctx.strokeStyle = parts.some(p => p.error) ? alpha(UI_TOKENS.danger, 0.4) : 'rgba(0, 0, 0, 0.12)';
     ctx.stroke();
 
     // render text segments
@@ -478,7 +479,7 @@ export class Renderer {
       }
       const p = parts[i];
       ctx.font = p.bold ? '600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : '500 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-      ctx.fillStyle = p.error ? '#dc2626' : (p.color || '#22252a');
+      ctx.fillStyle = p.error ? UI_TOKENS.danger : (p.color || UI_TOKENS.ink);
       ctx.textBaseline = 'middle';
       ctx.fillText(p.text, curX, y + h / 2);
       curX += ctx.measureText(p.text).width + 8;
@@ -511,10 +512,10 @@ export class Renderer {
         ctx.lineWidth = roadW;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = 'rgba(43, 184, 232, 0.45)'; // Trafficity translucent cyan ribbon
+        ctx.strokeStyle = alpha(UI_TOKENS.accent, 0.45); // translucent accent ribbon
         ctx.stroke();
 
-        // Rubberband line to mouse cursor — red when crossing water/rock
+        // Rubberband line to mouse cursor — danger when crossing water/rock
         const lastP = preview[preview.length - 1];
         const [lx, ly] = this.worldToScreen(lastP[0], lastP[1]);
         const curOk = terrain.isRoadable(mx, my);
@@ -523,18 +524,18 @@ export class Renderer {
         ctx.lineTo(msx, msy);
         ctx.lineWidth = roadW;
         ctx.lineCap = 'round';
-        ctx.strokeStyle = curOk ? 'rgba(43, 184, 232, 0.55)' : 'rgba(239, 68, 68, 0.5)';
+        ctx.strokeStyle = curOk ? alpha(UI_TOKENS.accent, 0.55) : alpha(UI_TOKENS.danger, 0.5);
         ctx.stroke();
 
-        // Cyan control point nodes — red when placed on invalid terrain
+        // Accent control point nodes — danger when placed on invalid terrain
         for (const p of preview) {
           const [px, py] = this.worldToScreen(p[0], p[1]);
           const ok = terrain.isRoadable(p[0], p[1]);
           ctx.beginPath();
           ctx.arc(px, py, 4 * zoom, 0, Math.PI * 2);
-          ctx.fillStyle = ok ? '#2bb8e8' : '#ef4444';
+          ctx.fillStyle = ok ? UI_TOKENS.accent : UI_TOKENS.danger;
           ctx.fill();
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = UI_TOKENS.surfaceRaised;
           ctx.lineWidth = 1.5 * zoom;
           ctx.stroke();
         }
@@ -549,8 +550,8 @@ export class Renderer {
 
         const isRoadable = terrain.isRoadable(mx, my);
         const parts = isRoadable
-          ? [{ text: `$${cost}`, bold: true }, { text: tool.charAt(0).toUpperCase() + tool.slice(1), color: '#6c7380' }]
-          : [{ text: `Cannot build`, error: true, bold: true }, { text: `Water / Rock`, color: '#dc2626' }];
+          ? [{ text: `$${cost}`, bold: true }, { text: tool.charAt(0).toUpperCase() + tool.slice(1), color: UI_TOKENS.muted }]
+          : [{ text: `Cannot build`, error: true, bold: true }, { text: `Water / Rock`, color: UI_TOKENS.danger }];
 
         this._drawPillBadge(ctx, msx + 18, msy - 12, parts);
       } else {
@@ -560,14 +561,14 @@ export class Renderer {
           const [snx, sny] = this.worldToScreen(snapNode.x, snapNode.y);
           ctx.beginPath();
           ctx.arc(snx, sny, 7 * zoom, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(43, 184, 232, 0.3)';
+          ctx.fillStyle = alpha(UI_TOKENS.accent, 0.3);
           ctx.fill();
-          ctx.strokeStyle = '#2bb8e8';
+          ctx.strokeStyle = UI_TOKENS.accent;
           ctx.lineWidth = 2 * zoom;
           ctx.stroke();
           this._drawPillBadge(ctx, msx + 18, msy - 12, [
-            { text: 'Connect', bold: true, color: '#2bb8e8' },
-            { text: snapNode.isRing ? 'Roundabout' : 'Junction', color: '#6c7380' }
+            { text: 'Connect', bold: true, color: UI_TOKENS.accent },
+            { text: snapNode.isRing ? 'Roundabout' : 'Junction', color: UI_TOKENS.muted }
           ]);
         }
       }
@@ -580,7 +581,7 @@ export class Renderer {
       ctx.beginPath();
       ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
       ctx.lineWidth = 7 * zoom;
-      ctx.strokeStyle = 'rgba(43, 184, 232, 0.55)';
+      ctx.strokeStyle = alpha(UI_TOKENS.accent, 0.55);
       ctx.stroke();
 
       // Inner and outer guide lines
@@ -588,7 +589,7 @@ export class Renderer {
       ctx.arc(cx, cy, ringR - 3.5 * zoom, 0, Math.PI * 2);
       ctx.arc(cx, cy, ringR + 3.5 * zoom, 0, Math.PI * 2);
       ctx.lineWidth = 1 * zoom;
-      ctx.strokeStyle = 'rgba(43, 184, 232, 0.85)';
+      ctx.strokeStyle = alpha(UI_TOKENS.accent, 0.85);
       ctx.stroke();
 
       // Directional arrow on the ring (counterclockwise)
@@ -598,7 +599,7 @@ export class Renderer {
       ctx.save();
       ctx.translate(ax, ay);
       ctx.rotate(arrowAng - Math.PI / 2);
-      ctx.fillStyle = '#22252a';
+      ctx.fillStyle = UI_TOKENS.ink;
       ctx.beginPath();
       ctx.moveTo(0, -3.5 * zoom);
       ctx.lineTo(3 * zoom, 3 * zoom);
@@ -615,7 +616,7 @@ export class Renderer {
       } else {
         this._drawPillBadge(ctx, cx + ringR + 10, cy, [
           { text: '$200', bold: true },
-          { text: snap ? 'Convert junction' : 'Place roundabout', color: '#6c7380' }
+          { text: snap ? 'Convert junction' : 'Place roundabout', color: UI_TOKENS.muted }
         ]);
       }
     } else if (tool === 'light') {
@@ -629,7 +630,7 @@ export class Renderer {
         ctx.stroke();
         this._drawPillBadge(ctx, msx + 18, msy - 12, [
           { text: snap.type === 'light' ? 'Configure light' : 'Install light', bold: true },
-          { text: `${snap.edges.size} roads`, color: '#6c7380' }
+          { text: `${snap.edges.size} roads`, color: UI_TOKENS.muted }
         ]);
       }
     } else if (tool === 'house' || tool === 'shop' || tool === 'factory') {
@@ -640,8 +641,8 @@ export class Renderer {
 
       ctx.save();
       ctx.translate(msx, msy);
-      ctx.fillStyle = isRoadable && canPlace ? 'rgba(43, 184, 232, 0.4)' : 'rgba(239, 68, 68, 0.4)';
-      ctx.strokeStyle = isRoadable && canPlace ? '#2bb8e8' : '#ef4444';
+      ctx.fillStyle = isRoadable && canPlace ? alpha(UI_TOKENS.accent, 0.4) : alpha(UI_TOKENS.danger, 0.4);
+      ctx.strokeStyle = isRoadable && canPlace ? UI_TOKENS.accent : UI_TOKENS.danger;
       ctx.lineWidth = 1.5 * zoom;
       this._roundRect(ctx, -s / 2, -s / 2, s, s, 3 * zoom);
       ctx.fill();
@@ -653,21 +654,21 @@ export class Renderer {
         ? [{ text: `No ${plural} left`, error: true, bold: true }]
         : !isRoadable
         ? [{ text: `Invalid terrain`, error: true, bold: true }]
-        : [{ text: def.label, bold: true }, { text: `Available: ${eco.batch[tool] || 0}`, color: '#6c7380' }];
+        : [{ text: def.label, bold: true }, { text: `Available: ${eco.batch[tool] || 0}`, color: UI_TOKENS.muted }];
 
       this._drawPillBadge(ctx, msx + s / 2 + 12, msy - 10, parts);
     } else if (tool === 'bulldoze') {
       // Bulldoze highlight ring
       ctx.beginPath();
       ctx.arc(msx, msy, 14 * zoom, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+      ctx.fillStyle = alpha(UI_TOKENS.danger, 0.2);
       ctx.fill();
-      ctx.strokeStyle = '#ef4444';
+      ctx.strokeStyle = UI_TOKENS.danger;
       ctx.lineWidth = 1.8 * zoom;
       ctx.stroke();
 
       this._drawPillBadge(ctx, msx + 18, msy - 12, [
-        { text: 'Demolish', bold: true, color: '#dc2626' }
+        { text: 'Demolish', bold: true, color: UI_TOKENS.danger }
       ]);
     }
   }

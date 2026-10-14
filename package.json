@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "test:browser": "node --test test/browser/smoke.js",
+    "test:browser": "node --test test/browser/smoke.js test/browser/ui.js",
     "test:soak": "node soak.js",
     "test:playtest": "node playtest.js",
     "start": "node server.js"

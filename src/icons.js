@@ -1,0 +1,74 @@
+// Inline SVG icon map — the only icon source in the project (no icon
+// dependency, no emoji control, no external sprite).
+//
+// Contract (DESIGN §2): 24x24 viewBox, displayed at 20px, stroke 1.5,
+// `currentColor`, rounded joins, decorative `aria-hidden`. A control's
+// accessible name comes from its own text or aria-label, never from the icon.
+//
+// Road classes are distinguished by lane strokes, not by three unrelated
+// glyphs: street draws one (dashed median), avenue two, highway three, and the
+// pavement band grows with the class. It is a hierarchy cue, not a scale
+// drawing.
+const ROOT_ATTRS = 'viewBox="0 0 24 24" width="20" height="20" fill="none"'
+  + ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round"'
+  + ' stroke-linejoin="round" aria-hidden="true" focusable="false"';
+
+const MEDIAN = '<path d="M4 12h16" stroke-dasharray="3 2.5"/>';
+
+export const ICONS = {
+  // ---- construction tools ----
+  select: '<path d="M6 3.5v15l3.9-3.7 2.7 5.6 2.3-1.1-2.6-5.4h5.3z"/>',
+  road: `<rect x="2" y="9" width="20" height="6" rx="1.5"/>${MEDIAN}`,
+  avenue: '<rect x="2" y="7.5" width="20" height="9" rx="1.5"/><path d="M4 10.5h16M4 13.5h16"/>',
+  highway: `<rect x="2" y="6" width="20" height="12" rx="1.5"/><path d="M4 9h16M4 15h16"/>${MEDIAN}`,
+  roundabout: '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3"/>'
+    + '<path d="M14.6 4.8l2.2 1.4-2.2 1.4"/>',
+  light: '<rect x="8.5" y="3" width="7" height="15" rx="2"/><path d="M12 18v3"/>'
+    + '<circle cx="12" cy="6.5" r="1"/><circle cx="12" cy="10.5" r="1"/><circle cx="12" cy="14.5" r="1"/>',
+  house: '<path d="M3.5 11.5L12 4.5l8.5 7"/><path d="M5.5 10.5v9h13v-9"/>'
+    + '<path d="M10 19.5v-4.5h4v4.5"/>',
+  shop: '<path d="M4 9.5h16v10H4z"/><path d="M3 9.5l1.5-4h15l1.5 4"/>'
+    + '<path d="M9.5 19.5v-5h5v5"/>',
+  factory: '<path d="M3 19.5V11l5 3v-3l5 3v-3l5 3v5.5z"/><path d="M17.5 11V4.5h3V11"/>',
+  bulldoze: '<path d="M12 3.5v8"/><path d="M8.5 8L12 11.5 15.5 8"/>'
+    + '<path d="M4.5 19.5h15"/><path d="M6.5 19.5v-3.5h11v3.5"/>',
+
+  // ---- chrome ----
+  save: '<path d="M12 3.5v10"/><path d="M8 9.5l4 4 4-4"/><path d="M4.5 16v4h15v-4"/>',
+  load: '<path d="M12 13.5v-10"/><path d="M8 7.5l4-4 4 4"/><path d="M4.5 16v4h15v-4"/>',
+  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/>'
+    + '<path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.7-.9 1.3v.7"/><path d="M12 17v.01"/>',
+  pause: '<path d="M9.5 5.5v13M14.5 5.5v13"/>',
+  play1: '<path d="M8 5.5L19 12L8 18.5z"/>',
+  play2: '<path d="M4.5 6.5L12.5 12L4.5 17.5z"/><path d="M11.5 6.5L19.5 12L11.5 17.5z"/>',
+  play3: '<path d="M2.5 7L8 12L2.5 17z"/><path d="M9 7L14.5 12L9 17z"/><path d="M15.5 7L21 12L15.5 17z"/>',
+};
+
+/** Ids the current UI must render (DESIGN §2), asserted by test/browser/ui.js. */
+export const REQUIRED_ICON_IDS = [
+  'select', 'road', 'avenue', 'highway', 'roundabout', 'light',
+  'house', 'shop', 'factory', 'bulldoze', 'save', 'load',
+  'close', 'help', 'pause', 'play1', 'play2', 'play3',
+];
+
+/**
+ * SVG markup for an icon id, or an empty string for an unknown id so a typo
+ * degrades to a missing glyph instead of breaking the whole UI.
+ */
+export function icon(id, className = 'icon') {
+  const body = ICONS[id];
+  if (!body) return '';
+  return `<svg class="${className}" ${ROOT_ATTRS}>${body}</svg>`;
+}
+
+/**
+ * Renders every element that declares `data-icon` (static markup keeps its
+ * visible text; icon-only controls carry an aria-label).
+ */
+export function mountIcons(root = document) {
+  root.querySelectorAll('[data-icon]').forEach(el => {
+    if (el.querySelector('svg')) return;
+    el.insertAdjacentHTML('afterbegin', icon(el.dataset.icon));
+  });
+}
