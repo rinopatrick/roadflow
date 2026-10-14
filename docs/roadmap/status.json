@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S01.5",
+  "nextTask": "S01.6",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -17,36 +17,15 @@
   ],
   "trackedGaps": [
     {
-      "id": "GAP-E05-crossings",
-      "summary": "eightCrossingsWorld resolves 6 junctions instead of the expected 8.",
-      "fixture": "test/fixtures/worlds.js::eightCrossingsWorld",
-      "characterizationTest": "test/invariants.test.js :: 'eightCrossingsWorld currently resolves fewer than 8 junctions (tracked gap)'",
-      "currentAsserted": 6,
-      "target": 8,
-      "fixOwner": "S01.5",
-      "actionWhenFixed": "Change the asserted 6 to anchors.expectedJunctionCount in the characterization test and delete this entry.",
-      "evidence": "EVIDENCE.md E05"
-    },
-    {
-      "id": "GAP-addroad-multipoint-topology",
-      "summary": "addRoad with more than two control points produces malformed topology. A four-corner closed loop drawn as ONE call yields 6 edges and 5 nodes (expected 4 edges) including a degree-6 hub and TWO separate nodes at identical coordinates, so the loop never closes.",
-      "discoveredIn": "S01.4",
-      "reproducer": "net.addRoad([[-250,30],[150,30],[150,210],[-250,210],[-250,30]]) -> net.edges.size is 6, node (150,30) has degree 6, and (-250,30) exists twice with degree 1 each. Drawing the same loop as four two-point addRoad calls gives the expected 4 edges and a clean degree-2 ring.",
-      "rootCause": "Each link passes controls.slice(1, i) as its midpoints, so later segments repeat earlier control points and overlap, and resolveCrossings then splits them into spurious junctions.",
-      "impact": "SEVERE. A loop drawn in one stroke becomes a degree-6 hub plus disconnected stubs, which gridlocks: 8 of 8 vehicles stopped with a 69s maximum wait, versus 4 vehicles / 2 stopped / 10 completed trips when the same loop is drawn as four calls.",
-      "fixOwner": "S01.5",
-      "actionWhenFixed": "Re-run scripts/diagnose-gridlock.mjs (both variants should report no gridlock and the loop should report 4 edges), and change the characterization expectation in test/invariants.test.js if the fixture topology shifts.",
-      "evidence": "EVIDENCE.md E12"
-    },
-    {
       "id": "GAP-loop-gridlock",
-      "summary": "Vehicles deadlock on a small city: all stopped, maximum wait about 69s, city congestion about 92%.",
+      "summary": "Vehicles deadlock in a small city. Reduced but NOT eliminated by S01.5: topology repair took the soak fixture from 8/8 stopped (69s max wait, 92% congestion) to 3/7 stopped, and city congestion from 94% to 43%.",
       "discoveredIn": "S01.4",
       "reproducer": "node scripts/diagnose-gridlock.mjs -> exits 1 and prints per-edge congestion plus per-vehicle wait.",
-      "rootCause": "Primarily GAP-addroad-multipoint-topology: the soak loop is malformed and contains a degree-6 hub. Junction yielding at that hub then holds every approach. Yielding alone is not proven to be an independent cause.",
+      "rootCause": "CORRECTED in S01.5. My earlier claim that malformed addRoad topology was the primary cause was only partly right: fixing it removed the degree-6 hub and roughly halved the deadlock, but a deadlock remains on a CLEAN degree-2 ring. The residual cause is MUTUAL YIELDING AT A DEGREE-2 NODE, which is a bend, not an intersection. In the fixture, car 7 (on e8 dir -1, wanting e23) and car 10 (on e23 dir 1, wanting e8) both stop 1.5 wu short of the same node and each waits for the other: car 10 is held by the yield-to-the-right scan (e8 counts as coming from its right, cars 7/8 within 60 wu at under 3 wu/s) and car 7 is held by the occupied-intersection-zone check (car 10 within 10 wu of the node on a crossing axis). Neither branch is appropriate when node.edges.size === 2.",
       "impact": "Gameplay-breaking for small cities. Previously INVISIBLE because the broken congestion metric reported about 2% while every vehicle was stopped (EVIDENCE E03). The metric fix in S01.4 is what made it observable.",
-      "fixOwner": "S04.2 (connector reservations) with the acceptance gate in S04.6, after S01.5 repairs addRoad topology.",
-      "actionWhenFixed": "scripts/diagnose-gridlock.mjs must exit 0, and the soak must show no vehicle waiting more than a few seconds in the four-building fixture."
+      "fixOwner": "S04.2 (connector reservations), acceptance gate S04.6. Do NOT band-aid in S01.5/S01.6: S04.2 replaces the yielding model, so a guard here would be discarded and could mask the real fix.",
+      "actionWhenFixed": "scripts/diagnose-gridlock.mjs must exit 0 and the soak must show no vehicle waiting more than a few seconds in the four-building fixture. A degree-2 exemption is the likely minimal fix but belongs with the connector-reservation work.",
+      "evidence": "EVIDENCE.md E14"
     },
     {
       "id": "GAP-pending-returns-not-saved",
@@ -63,12 +42,17 @@
       "discoveredIn": "S01.1",
       "reproducer": "net.addRoad([[0,0],[10,0]]) then net.addRoad([[10,0],[20,0]]) -> second call returns {nodeIds:[], edgeIds:[]} and the graph still has 1 edge.",
       "impact": "Silent no-op rather than an explained rejection. Blocks short connector and slip-lane segments, which S04.3 needs.",
-      "fixOwner": "S03.2",
-      "actionWhenFixed": "Reject with an explicit reason, or make snapping direction-aware so a short forward segment is buildable. Remove the 18 wu minimum from the S01.1 test helpers' comments once resolved."
+      "fixOwner": "S03.2 (snapping model), consumed by S04.3",
+      "actionWhenFixed": "Flip the assertion in test/construction.test.js that currently accepts \"either builds or explains itself\" to require that a short connector between two distinct existing nodes actually builds.",
+      "partialFixByS01_5": "S01.5 made this EXPLICIT rather than silent: addRoad now returns reason \"the road is shorter than the snapping distance (18 wu), so its ends would land on the same node\". This closes the silent-no-op half.",
+      "remaining": "Short segments still cannot be BUILT, which S04.3 needs for slip lanes and auxiliary segments. That needs direction-aware snapping or an explicit override, not just a better message."
     }
   ],
   "branchPolicy": {
-    "protected": ["main", "master"],
+    "protected": [
+      "main",
+      "master"
+    ],
     "integrationTrunk": "roadmap/implementation",
     "taskBranchPattern": "task/Sxx.y-<slug>",
     "mergeStrategy": "--no-ff",
@@ -84,10 +68,24 @@
     "remote": "none (no remote configured, nothing pushed)",
     "externalBackup": "C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z",
     "backupManifest": "MANIFEST.sha256 (42 entries, sha256sum -c all OK)",
-    "backupExcludes": ["node_modules", "shots", "server.log", ".git"],
+    "backupExcludes": [
+      "node_modules",
+      "shots",
+      "server.log",
+      ".git"
+    ],
     "parentHomeRepoUntouched": "C:/Users/patri/.git still present and unmodified",
-    "runtime": { "node": "v24.14.0", "npm": "11.12.0" },
-    "gitignore": ["node_modules/", "artifacts/", "shots/", "server.log", "*.tmp"]
+    "runtime": {
+      "node": "v24.14.0",
+      "npm": "11.12.0"
+    },
+    "gitignore": [
+      "node_modules/",
+      "artifacts/",
+      "shots/",
+      "server.log",
+      "*.tmp"
+    ]
   },
   "baseline": {
     "unitTestsPassed": 42,
@@ -101,114 +99,923 @@
     "evidence": "EVIDENCE.md"
   },
   "tasks": [
-    {"id":"S00.1","status":"done","dependsOn":[],"file":"stages/00-safety.md","evidence":[
-      {"command":"git rev-parse --show-toplevel","exitCode":0,"result":"Before: C:/Users/patri (parent home dir). After git init in project: C:/Users/patri/roadflow. Parent C:/Users/patri/.git verified still present and not moved or deleted.","artifact":null},
-      {"command":"node checkpoint.cjs (backup + SHA-256 manifest)","exitCode":0,"result":"sourceFiles 42, manifestLines 42, verified 42, mismatches [] -> dest C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z","artifact":"C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z/MANIFEST.sha256"},
-      {"command":"cmp src/economy.js + cmp index.html (independent of manifest script)","exitCode":0,"result":"both IDENTICAL to source bytes","artifact":null},
-      {"command":"sha256sum -c MANIFEST.sha256","exitCode":0,"result":"all 42 entries OK; on-disk backup file count 42 equals manifest line count 42","artifact":null},
-      {"command":"git add .gitignore src test docs index.html README.md package.json package-lock.json server.js playtest.js soak.js","exitCode":0,"result":"43 staged. Zero paths outside project. Zero node_modules/shots/artifacts staged. Zero home-directory files (NTUSER/OneDrive/Downloads/.ssh/AppData) leaked. Staged-vs-manifest diff is exactly .gitignore (created after backup).","artifact":null},
-      {"command":"npm test","exitCode":0,"result":"tests 42, pass 42, fail 0, duration_ms 369.91 (baseline preserved)","artifact":null}
-    ],"notes":["Operator decisions: local Git repo + external backup; ignore entire shots/ (36 script-generated captures, none authored).","No source files were edited by this task. Only additions: .gitignore and docs/roadmap/status.json notes.","Branch is main; no remote configured; nothing pushed."]},
-    {"id":"S00.2","status":"done","dependsOn":["S00.1"],"file":"stages/00-safety.md","evidence":[
-      {"command":"npm test","exitCode":0,"result":"tests 42, pass 42, fail 0, duration_ms 395.54 (unit suite stayed browser-free and unchanged)","artifact":null},
-      {"command":"npm run test:browser","exitCode":0,"result":"tests 6, pass 6, fail 0, duration_ms 5159.05. Cases: boot canvas/tools/speeds, road action adds edges, house consumes one and adds 4 residents, rejected shop placement consumes no stock, save writes parseable v1 snapshot with edges>0 and buildings>0, zero browser errors.","artifact":"artifacts/run-1791868317768"},
-      {"command":"node --test test/browser/_fail-probe.mjs (negative control, then deleted)","exitCode":1,"result":"Deliberately wrong expectation (pop 999) exited 1 with AssertionError. Probe logged observed population=4, batch.house=3, proving it reached the real assertion instead of failing early. Probe file removed afterwards.","artifact":null},
-      {"command":"npm run test:soak","exitCode":0,"result":"90s default. t+15s..t+90s samples logged; final pop 8, trips 10, avg 35s, level 1, xp 31.92%, cars 2. Assertions passed: maxCars>0, trips>=1, HUD trips matches economy, xp>0, zero non-finite or negative-speed vehicles, zero errors.","artifact":"artifacts/soak-1791868517540"},
-      {"command":"npm run test:playtest","exitCode":0,"result":"13-frame capture tour written; HUD pop 4, trips 0, level 1. trips 0 matches the pre-existing baseline (tour does not run long enough) and this script asserts no trip count. Zoom-out direction corrected: positive wheel delta now reduces zoom, matching the tour's comment.","artifact":"artifacts/playtest-1791868738673"},
-      {"command":"visual inspection of artifacts/run-*/02-road.png","exitCode":0,"result":"Real rendered frame, not blank: committed road with yellow centreline, Connect/Junction snap badge, HUD Population 0, tool badges House 4 / Shop 2 / Factory 1.","artifact":"artifacts/run-1791868317768/02-road.png"}
-    ],"notes":["Created: test/browser/harness.js, test/browser/smoke.js, scripts/verify-backup.mjs. Rewrote playtest.js and soak.js as assertion-capable ES modules importing the harness.","Harness owns only the server PID it spawned and the browser it launched; it refuses to test a page that does not look like Roadflow, and uses a free port so it never depends on or kills unrelated processes.","Artifacts now go to artifacts/<run-id>/ (gitignored). Original shots/ left untouched as historical evidence.","scripts/verify-backup.mjs added because 'sha256sum -c' resolves manifest paths against cwd, which caused a false 41-of-42 reading during S00.1. Verified: node scripts/verify-backup.mjs returns 42/42 with 0 failures.","Branch policy recorded in EXECUTOR.md section 5b."]},
-    {"id":"S00.3","status":"done","dependsOn":["S00.2"],"file":"stages/00-safety.md","evidence":[
-      {"command":"node scripts/make-legacy-fixture.mjs","exitCode":0,"result":"Wrote test/fixtures/legacy-v1.json: seed 1, 14 nodes, 14 edges, 3 buildings (house/shop/factory), 1 signal, 4 ring nodes, 4 ring edges, 4 one-way edges. Built through the real public APIs and serialized with the real toJSON() methods, so it is an authentic v1 payload rather than hand-written JSON.","artifact":"test/fixtures/legacy-v1.json"},
-      {"command":"round-trip probe through RoadNetwork.fromJSON + Economy.fromJSON","exitCode":0,"result":"nodes 14, edges 14, buildings 3, xp 120, trips 3 preserved; 0 integrity problems; house->shop route resolves (3 nodes, 25.0s).","artifact":null},
-      {"command":"node --test test/invariants.test.js","exitCode":0,"result":"tests 21, pass 21, fail 0. Includes 10 negative controls (assert.throws) proving each invariant helper rejects deliberately corrupted input, and a level-up threshold test.","artifact":null},
-      {"command":"npm test (full suite)","exitCode":0,"result":"tests 63, pass 63, fail 0, duration_ms 368.23. Was 42 before this task; +21 new, no existing test changed or removed.","artifact":null},
-      {"command":"level-up sensitivity probe","exitCode":0,"result":"Threshold LEVEL_XP(1)=300. No-factory fixture: 290 -> 300.000, crosses. With factory (pollution penalty): 290 -> 299.899, does not cross. The setup is tight to ~0.1 XP, proving the threshold test is not vacuous.","artifact":null},
-      {"command":"ring-structure inspection probe","exitCode":0,"result":"Each ring node has exactly 2 ring edges + 1 arm edge (degree 3); arm outer ends are degree 1. An initial assertion of mine wrongly expected total degree 2 and failed; the assertion was corrected to check ring-degree, not the source.","artifact":null}
-    ],"notes":["Created: test/fixtures/worlds.js (builders + loadLegacyV1 + routeBetween), test/helpers/invariants.js (assertGraphConsistent, assertVehiclesFinite, assertEconomyConsistent), test/invariants.test.js (21 tests), test/fixtures/legacy-v1.json, scripts/make-legacy-fixture.mjs.","Fixture builders expose semantic anchors (nodes/buildings/edges), so tests never depend on generated IDs. Terrain is mocked by default for noise-free geometry; the save fixture uses real Terrain because a save stores a seed.","eightCrossingsWorld's 8-junction target is recorded as a characterization test asserting today's 6, plus trackedGaps entry GAP-E05-crossings. Not a skipped test claiming coverage.","legacy-v1.json is frozen but NOT byte-reproducible: v1 uid() uses Math.random, so regenerating changes IDs. Documented in the generator. Deterministic IDs arrive in S01.1."]},
-    {"id":"S01.1","status":"done","dependsOn":["S00.3"],"file":"stages/01-foundation.md","evidence":[
-      {"command":"node --test test/simulationClock.test.js","exitCode":0,"result":"tests 11, pass 11, fail 0. Covers fixed STEP ticks, frame-partition equivalence at 1x/3x/8x, pause freezing time, long-stall dropping, tick-budget cap, reset, invalid-input rejection and sub-step remainder accumulation.","artifact":null},
-      {"command":"node --test test/coreState.test.js","exitCode":0,"result":"tests 15, pass 15, fail 0. Includes a golden-value test proving the makeRng output sequence is byte-identical to the pre-change implementation, RNG state save/restore replay, uint32 validation, and RoadNetwork deterministic-ID plus reserve-on-load behaviour.","artifact":null},
-      {"command":"node --test test/trafficAdvance.test.js","exitCode":0,"result":"tests 7, pass 7, fail 0. Overshoot carried across an edge boundary (s ~ 10 on the second edge, not 0), path progress continuous across 12 transitions, multi-edge crossing bounded, final-overshoot arrival counted once, speedFactor 1 with maxSpeed removed, injected RNG reproducible and demonstrably consulted, identical trajectories for identical seeds.","artifact":null},
-      {"command":"npm test","exitCode":0,"result":"tests 96, pass 96, fail 0, duration_ms 433.91. Was 63 before this task; +33 new. No existing test modified, weakened or removed.","artifact":null},
-      {"command":"npm run test:browser","exitCode":0,"result":"tests 7, pass 7, fail 0. Added a clock test asserting pause freezes simulation time, 1x advances about 1s per wall second, and 8x outpaces 1x.","artifact":null},
-      {"command":"npm run test:soak","exitCode":0,"result":"90s. Final pop 8, trips 10, avg 35s, level 1, xp 31.9201%, cars 2 - identical to the pre-change baseline, demonstrating behavioural equivalence of the fixed clock at 3x.","artifact":"artifacts/soak-1791875239243"},
-      {"command":"in-browser clock probe","exitCode":0,"result":"paused=0 (frozen), speed1=1.2167s, speed3=3.6500s, speed8=9.7333s over equal wall windows. Ratios 3x/1x=3.00 and 8x/1x=8.00. Zero browser errors. Previously the loop incremented traffic.time twice per frame, so 1x ran at roughly 2x.","artifact":null},
-      {"command":"in-browser determinism probe (seed 1, same three clicks, twice)","exitCode":0,"result":"Run A and Run B both produced 5 nodes, 4 edges, 2 buildings with identical node IDs (n1,n2,n4), identical edge IDs (e10,e11) and identical buildings. Pre-change, uid() used Math.random so IDs differed every run.","artifact":null},
-      {"command":"FOLLOW-UP S01.1b: node --test test/buildingIdentity.test.js","exitCode":0,"result":"tests 8, pass 8, fail 0. Before the fix 4 of these failed, exposing that building IDs were still random. Covers deterministic building IDs, sequential format, no collision with graph IDs, deterministic in-range rot, rot save/load round trip, reserve-on-load, legacy path, and a golden check that rot consumes no simulation-stream draw.","artifact":null},
-      {"command":"FOLLOW-UP S01.1b: in-browser determinism probe comparing IDs and rot","exitCode":0,"result":"nodeIds [n1,n2,n4], edgeIds [e5,e6], buildingIds [b7,b8] and rots [-0.24863..., 0.24052...] all identical across two runs of seed 1. The earlier probe compared buildings as type@x,y and therefore missed the random building IDs.","artifact":null},
-      {"command":"FOLLOW-UP S01.1b: mutation check","exitCode":1,"result":"Reverting _newBuildingId to uid() failed the unit suite (2 of 8) and the browser guard (1 of 8); restoring the fix returned both to 0 failures. Confirms the guards are not vacuous.","artifact":null},
-      {"command":"FOLLOW-UP S01.1b: npm run test:soak","exitCode":0,"result":"After splitting the cosmetic RNG stream, the 90s soak is byte-identical to the pre-change baseline: pop 8, trips 10, avg 35s, xp 31.9201%. An intermediate version that drew rot from the simulation stream produced 12 trips, which is why the streams were split.","artifact":"artifacts/soak-1791877688133"},
-      {"command":"FOLLOW-UP S01.1b: npm test + npm run test:browser","exitCode":0,"result":"unit tests 104, pass 104, fail 0; browser tests 8, pass 8, fail 0.","artifact":null}
-    ],"notes":["Created: src/simulationClock.js, test/simulationClock.test.js, test/coreState.test.js, test/trafficAdvance.test.js, test/buildingIdentity.test.js. Modified: src/core.js (RNG state access, createIdSource), src/roadNetwork.js (optional ids injection, _newId, reserve on fromJSON), src/traffic.js (injected rng, speedFactor replacing unused maxSpeed, residual-distance route advance), src/main.js (accumulator loop, world ID source, visibilitychange reset, building-ID reservation on load, removed Math.random rot), src/economy.js (live ID source, cosmetic RNG stream, rot, reserve on fromJSON).","Deliberate behaviour change: makeRng gains getState/setState WITHOUT altering its output sequence. Protected by a golden-value test captured from the pre-change implementation.","Deliberate behaviour change: traffic.time previously advanced twice per frame (simTime += dt then traffic.update(dt) incremented again). Now the clock is the only source and the renderer reads traffic.time.","Discovered GAP-min-segment-length while writing tests: segments shorter than NODE_SNAP (18 wu) silently build nothing. Recorded as a tracked gap owned by S03.2, not silently worked around.","Three test-authoring errors were found and corrected rather than loosened: (1) a golden capture using toFixed(17) did not round-trip doubles, replaced with String(v); (2) stepBefore was captured after sim.update so transitions never counted; (3) an earlier determinism probe compared buildings by type@x,y instead of by ID and so missed random building IDs. All were verification weaknesses, not source bugs.","Follow-up S01.1b exists because the original S01.1 determinism claim was incomplete: nodes and edges were deterministic but buildings were not, and rot used Math.random. Recorded in EVIDENCE E10/E11 rather than quietly patched."]},
-    {"id":"S01.2","status":"done","dependsOn":["S01.1"],"file":"stages/01-foundation.md","evidence":[
-      {"command":"node --test test/returnDispatch.test.js","exitCode":0,"result":"tests 12, pass 12, fail 0. Before the fix 8 of these failed. Covers access-node resolution, re-attachment during dwell, blocked-spawn retry, deleted origin/destination/noAccessNode cancellation with reasons, no duplicate cancellation, no second XP reward, removal of the no-op setTimeout, a full outbound-dwell-return integration, and two characterization tests pinning that pending returns are not yet persisted (S01.7).","artifact":null},
-      {"command":"npm test","exitCode":0,"result":"tests 117, pass 117, fail 0, duration_ms 451.10. Was 104 before this task; +13 new. No existing test weakened or removed.","artifact":null},
-      {"command":"npm run test:browser","exitCode":0,"result":"tests 8, pass 8, fail 0.","artifact":null},
-      {"command":"in-browser return-lifecycle probe (seed 1, loop road, 2 houses + 1 shop, 3x)","exitCode":0,"result":"t+32s outbound completes: trips=1, pendingReturns=1. t+40s: a car with purpose='return' is driving, pendingReturns=0. t+48s next outbound starts. cancelledReturns=0, all cancellation reasons 0, zero browser errors. Proves returns genuinely spawn rather than failing silently.","artifact":null},
-      {"command":"npm run test:soak","exitCode":0,"result":"90s. Changed from the S01.1 baseline (10 trips, 2 cars, 0% congestion) to 8 trips, 8 cars, 2% congestion. Expected consequence of returns now spawning cars onto the same network, not a regression; the trips>=1 gate still passes.","artifact":"artifacts/soak-1791884080415"},
-      {"command":"mutation check: revert spawnCar(fromNode,toNode) to spawnCar(r.from,r.to)","exitCode":1,"result":"3 of 12 tests failed; restoring the fix returned to 0 failures. Confirms the guards are not vacuous.","artifact":null}
-    ],"notes":["Modified src/economy.js: _pendingReturns/cancelledReturns/cancellationReasons in the constructor, pendingReturnCount getter, Economy.RETURN_RETRY_SECONDS=2, _cancelReturn helper, rewritten _completeTrip (no-op setTimeout removed) and processReturns (dispatch-time resolution, retry on blocked spawn, cancel with reason). Created test/returnDispatch.test.js.","Returns store BUILDING ids and resolve to access nodes at dispatch time, so a building deleted, moved or re-attached during the dwell is handled correctly rather than spawning a car to a stale node.","Test-authoring error found and corrected rather than loosened: my first two cancellation tests had the return trip's origin and destination swapped (the return departs the shop and ends at the home). Renamed and rewritten to test each path accurately, and added a third case for a vanished access node.","Second test-authoring error: the legacy-fixture path used ../fixtures/ from a file already inside test/, which resolved to a non-existent roadflow/fixtures/. Corrected to ./fixtures/.","Deliberately did NOT add pending-return persistence: the plan assigns the full snapshot to S01.7, and a partial implementation would have to be undone. Recorded as GAP-pending-returns-not-saved with characterization tests instead."]},
-    {"id":"S01.3","status":"done","dependsOn":["S01.2"],"file":"stages/01-foundation.md","evidence":[
-      {"command":"node --test test/roadDimensions.test.js","exitCode":0,"result":"tests 14, pass 14, fail 0. Before the fix the file could not even import (no roadProfiles.js). Covers the containment rule for every preset/direction/lane, pavement-width formula, width hierarchy, forward/backward mirror symmetry, outward lane ordering, out-of-range lane rejection, one-way centring, RoadNetwork.laneOffset agreement, lanePoint containment, preserved right-of-direction behaviour, ring edges, roundabout radius and ROAD_CLASS/profile consistency.","artifact":null},
-      {"command":"npm test","exitCode":0,"result":"tests 133, pass 133, fail 0, duration_ms 614.91. Was 119 before this task; +14 new. The original 42 tests still pass unchanged.","artifact":null},
-      {"command":"in-browser containment probe (12 lanes, all three classes)","exitCode":0,"result":"Pavement halves: street 8.1, avenue 13.6, highway 19.6. Lanes measured 12, containment violations 0. Worst case avenue dir 1 lane 1: lateral 9.6, vehicle outer 11.4, half 13.6 -> 2.2 wu of slack INSIDE the pavement, where it previously overflowed by 3.4.","artifact":null},
-      {"command":"visual capture before and after (scripts/capture-road-classes.mjs)","exitCode":0,"result":"Six frames each at DPR 1/2 and zoom 0.25/1/3. Before: on the avenue the lane dashes sat at the very edge of the white surface and a car hung partly off the pavement. After: dashes sit clearly inside, the car is fully on the road, and the three classes read as street < avenue < highway by width.","artifact":"artifacts/before-s013, artifacts/after-s013"},
-      {"command":"npm run test:browser","exitCode":0,"result":"tests 8, pass 8, fail 0.","artifact":null},
-      {"command":"npm run test:soak","exitCode":0,"result":"90s, byte-identical to the S01.2 result: pop 8, trips 8, avg 33s, congestion 2%, xp 25.5361%, cars 8. Confirms simulation is untouched, because lane CENTRES did not move - only the drawn pavement widened.","artifact":"artifacts/soak-1791887000237"},
-      {"command":"mutation check A (revert lane offset formula)","exitCode":1,"result":"Only 1 incidental failure (a one-way centring case). This exposed that reverting the offset does NOT reproduce the original bug, because lane offsets were already correct.","artifact":null},
-      {"command":"mutation check B (revert pavement width to 11/16/24 - the accurate mutation)","exitCode":1,"result":"4 of 14 tests failed with exactly the E02 numbers: 'street dir 1 lane 0: vehicle outer edge 5.650 exceeds pavement half-width 5.500' and 'dir 1 lane 2: lateral 15.600 + half car exceeds 12.000'. Restoring returned to 0 failures.","artifact":null}
-    ],"notes":["Created: src/roadProfiles.js (roadDimensions, laneCenterOffset, outerLaneOffset, ROAD_PRESETS, CAR_HALF_WIDTH), test/roadDimensions.test.js, scripts/capture-road-classes.mjs. Modified: src/roadNetwork.js (imports the profile model, derives ROAD_CLASS width/lanesPerDir/laneW from it at load, laneOffset/lanePoint delegate, roundabout max-arm-width and ring class use roadDimensions), src/render.js (casing, shadow, fill, lane dashes, centreline, road preview and congestion overlay all use roadDimensions), src/main.js (exposed renderer on __rf so visual tests can set the camera precisely).","IMPORTANT CORRECTION: the lane offsets were already correct. The real defect was a too-narrow pavement (hand-chosen 11/16/24 that did not follow from the lane formula). My first mutation reverted the offset and proved nothing; the accurate mutation reverts the width. Recorded in EVIDENCE E02 so the wrong half of the inconsistency is not re-tested.","Lane divider dashes are now positioned from the same lane-centre model that places vehicles, so a dash always sits exactly between two lanes rather than at a hard-coded offset. Centreline is omitted on one-way roads, which have no centre division.","ROAD_CLASS.width/lanesPerDir/laneW are recomputed from roadProfiles at module load rather than deleted, so existing callers and the original test asserting highway > avenue > street width keep working without a second source of truth.","capture-road-classes.mjs initially placed roads at world y=-260, which mapped to screen y=140 - under the HUD card - so the clicks hit the HUD and no road was built. Fixed by framing the camera so the road band maps to screen y=400, clear of the HUD and the bottom dock. Also added a spine road so all three classes carry vehicles rather than only the nearest one.","The renderer hook on __rf is read/write for tests only; gameplay never reads from __rf."]},
-    {"id":"S01.4","status":"done","dependsOn":["S01.3"],"file":"stages/01-foundation.md","evidence":[
-      {"command":"node --test test/signals.test.js test/congestion.test.js","exitCode":0,"result":"tests 30, pass 30, fail 0. Before the fix both files failed to import (no signals.js or metrics.js). Covers the phase layout (green 2.94 / yellow 2.00 / all-red 2.06 for cycle 14 ratio 0.42), phase ordering, axis switching and cycle wrap, all-red clearance at the end of each half-cycle, countdown bounds, invalid-cycle and non-finite-time rejection, ratio clamping, offset normalisation, the yellow cap, axis permission helpers, and that both axes are never green together. Congestion side covers convergence to 1, timestep independence at 60/30/120 Hz, the closed-form EMA value, decay when empty, clamping, vehicle-weighted city aggregation, and stats fields.","artifact":null},
-      {"command":"npm test","exitCode":0,"result":"tests 164, pass 164, fail 0, duration_ms 783.24. Was 133 before this task; +31 new.","artifact":null},
-      {"command":"npm run test:browser","exitCode":0,"result":"tests 10, pass 10, fail 0. Two new checks: the HUD congestion text equals the shared metric (proving the old /0.6 rescale is gone), and a PIXEL-LEVEL check that the drawn signal dot colour matches getLegacyPhase at t=1 (green), 5 (yellow), 8 (all-red) and 11 (axis y green, so the dot is red).","artifact":null},
-      {"command":"npm run test:soak","exitCode":0,"result":"90s. Trips 8 and cars 8 as before, but congestion now honestly reports 94% at the end instead of 2%. Investigated rather than accepted: see GAP-loop-gridlock.","artifact":"artifacts/soak-1791888280589"},
-      {"command":"node scripts/diagnose-gridlock.mjs","exitCode":1,"result":"Revealed a pre-existing gridlock. All 8 vehicles stopped, several for 69s, city congestion 92%. Running the same scenario with congestion-aware routing DISABLED reproduced it identically (8 stopped, 68.9s), proving the deadlock is not caused by the new congestion values. Every stuck vehicle had nextNodeDegree=6.","artifact":"scripts/diagnose-gridlock.mjs"},
-      {"command":"addRoad topology probe (one call versus four)","exitCode":0,"result":"One addRoad call for a four-corner loop produced 6 edges, 5 nodes, a degree-6 hub at (150,30) and TWO separate degree-1 nodes both at (-250,30) - the loop never closed. Four two-point calls produced the expected 4 edges and a clean degree-2 ring, with 10 completed trips and 4 vehicles instead of 8 gridlocked. Recorded as GAP-addroad-multipoint-topology, owned by S01.5.","artifact":null},
-      {"command":"mutation check: restore the original congestion EMA scaling","exitCode":1,"result":"Reverting to `old * 0.98 + frac * 0.02 * (dt * 60) * 0.05` fails the convergence and timestep-independence tests; restoring returns to 0 failures.","artifact":null}
-    ],"notes":["Created: src/signals.js (getLegacyPhase, phaseForAxis, limits), src/metrics.js (cityCongestion, formatCongestion, simulationStats, clamp01), test/signals.test.js, test/congestion.test.js, scripts/diagnose-gridlock.mjs. Modified: src/traffic.js (CONGESTION_TAU, timestep-independent EMA, publishes edge._carCount, shared phase authority in _mustYield), src/render.js (_drawNode uses getLegacyPhase and shows amber for yellow), src/main.js (HUD uses cityCongestion/formatCongestion, removed the /0.6 fudge, removed the duplicate simTime counter so the renderer reads traffic.time), test/traffic.test.js (rewrote the light test), test/browser/smoke.js (two new checks).","REWRITTEN TEST, not weakened: the original 'traffic light stops cross traffic during red' test assumed edges[0] was horizontal (it is vertical) and hard-coded 'x' as the car's axis while using the OLD half-cycle formula to decide what counted as red. Its red detection was therefore inverted for the car it spawned and it only passed by accident. The replacement classifies each approach by real geometry and uses the shared phase authority. A follow-up assertion that every non-green car must hold was itself too strict: yellow for your own axis legitimately permits clearing, so the test now exempts that documented case.","Also removed a duplicate `traffic.time = data.simTime` assignment found while deleting the simTime counter.","The congestion fix REVEALED a pre-existing gridlock rather than causing one: proven by disabling congestion-aware routing and reproducing the identical deadlock. Recorded as GAP-loop-gridlock with a reproducible diagnostic script.","The gridlock's primary cause was then traced to addRoad topology (GAP-addroad-multipoint-topology): a four-corner loop drawn in one stroke becomes a degree-6 hub plus disconnected stubs. Deliberately NOT patched here - S01.5 owns addRoad geometry and S04.2/S04.6 own junction yielding, and a band-aid would conflict with both."]},
-    {"id":"S01.5","status":"pending","dependsOn":["S01.4"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
-    {"id":"S01.6","status":"pending","dependsOn":["S01.5"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
-    {"id":"S01.7","status":"pending","dependsOn":["S01.6"],"file":"stages/01-foundation.md","evidence":[],"notes":[]},
-    {"id":"S02.1","status":"pending","dependsOn":["S01.7"],"file":"stages/02-experience.md","evidence":[],"notes":[]},
-    {"id":"S02.2","status":"pending","dependsOn":["S02.1"],"file":"stages/02-experience.md","evidence":[],"notes":[]},
-    {"id":"S02.3","status":"pending","dependsOn":["S02.2"],"file":"stages/02-experience.md","evidence":[],"notes":[]},
-    {"id":"S02.4","status":"pending","dependsOn":["S02.3"],"file":"stages/02-experience.md","evidence":[],"notes":[]},
-    {"id":"S02.5","status":"pending","dependsOn":["S02.4"],"file":"stages/02-experience.md","evidence":[],"notes":[]},
-    {"id":"S02.6","status":"pending","dependsOn":["S02.5"],"file":"stages/02-experience.md","evidence":[],"notes":[]},
-    {"id":"S03.1","status":"pending","dependsOn":["S02.6"],"file":"stages/03-construction.md","evidence":[],"notes":[]},
-    {"id":"S03.2","status":"pending","dependsOn":["S03.1"],"file":"stages/03-construction.md","evidence":[],"notes":[]},
-    {"id":"S03.3","status":"pending","dependsOn":["S03.2"],"file":"stages/03-construction.md","evidence":[],"notes":[]},
-    {"id":"S03.4","status":"pending","dependsOn":["S03.3"],"file":"stages/03-construction.md","evidence":[],"notes":[]},
-    {"id":"S03.5","status":"pending","dependsOn":["S03.4"],"file":"stages/03-construction.md","evidence":[],"notes":[]},
-    {"id":"S04.1","status":"pending","dependsOn":["S03.5"],"file":"stages/04-traffic.md","evidence":[],"notes":[]},
-    {"id":"S04.2","status":"pending","dependsOn":["S04.1"],"file":"stages/04-traffic.md","evidence":[],"notes":[]},
-    {"id":"S04.3","status":"pending","dependsOn":["S04.2"],"file":"stages/04-traffic.md","evidence":[],"notes":[]},
-    {"id":"S04.4","status":"pending","dependsOn":["S04.3"],"file":"stages/04-traffic.md","evidence":[],"notes":[]},
-    {"id":"S04.5","status":"pending","dependsOn":["S04.4"],"file":"stages/04-traffic.md","evidence":[],"notes":[]},
-    {"id":"S04.6","status":"pending","dependsOn":["S04.5"],"file":"stages/04-traffic.md","evidence":[],"notes":[]},
-    {"id":"S05.1","status":"pending","dependsOn":["S04.6"],"file":"stages/05-elevation.md","evidence":[],"notes":[]},
-    {"id":"S05.2","status":"pending","dependsOn":["S05.1"],"file":"stages/05-elevation.md","evidence":[],"notes":[]},
-    {"id":"S05.3","status":"pending","dependsOn":["S05.2"],"file":"stages/05-elevation.md","evidence":[],"notes":[]},
-    {"id":"S05.4","status":"pending","dependsOn":["S05.3"],"file":"stages/05-elevation.md","evidence":[],"notes":[]},
-    {"id":"S06.1","status":"pending","dependsOn":["S05.4"],"file":"stages/06-city.md","evidence":[],"notes":[]},
-    {"id":"S06.2","status":"pending","dependsOn":["S06.1"],"file":"stages/06-city.md","evidence":[],"notes":[]},
-    {"id":"S06.3","status":"pending","dependsOn":["S06.2"],"file":"stages/06-city.md","evidence":[],"notes":[]},
-    {"id":"S06.4","status":"pending","dependsOn":["S06.3"],"file":"stages/06-city.md","evidence":[],"notes":[]},
-    {"id":"S06.5","status":"pending","dependsOn":["S06.4"],"file":"stages/06-city.md","evidence":[],"notes":[]},
-    {"id":"S06.6","status":"pending","dependsOn":["S06.5"],"file":"stages/06-city.md","evidence":[],"notes":[]},
-    {"id":"S07.1","status":"pending","dependsOn":["S06.6"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S07.2","status":"pending","dependsOn":["S07.1"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S07.3","status":"pending","dependsOn":["S07.2"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S07.4","status":"pending","dependsOn":["S07.3"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S07.5","status":"pending","dependsOn":["S07.4"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S07.6","status":"pending","dependsOn":["S07.5"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S07.7","status":"pending","dependsOn":["S07.6"],"file":"stages/07-depth.md","evidence":[],"notes":[]},
-    {"id":"S08.1","status":"pending","dependsOn":["S07.7"],"file":"stages/08-release.md","evidence":[],"notes":[]},
-    {"id":"S08.2","status":"pending","dependsOn":["S08.1"],"file":"stages/08-release.md","evidence":[],"notes":[]},
-    {"id":"S08.3","status":"pending","dependsOn":["S08.2"],"file":"stages/08-release.md","evidence":[],"notes":[]},
-    {"id":"S08.4","status":"pending","dependsOn":["S08.3"],"file":"stages/08-release.md","evidence":[],"notes":[]}
+    {
+      "id": "S00.1",
+      "status": "done",
+      "dependsOn": [],
+      "file": "stages/00-safety.md",
+      "evidence": [
+        {
+          "command": "git rev-parse --show-toplevel",
+          "exitCode": 0,
+          "result": "Before: C:/Users/patri (parent home dir). After git init in project: C:/Users/patri/roadflow. Parent C:/Users/patri/.git verified still present and not moved or deleted.",
+          "artifact": null
+        },
+        {
+          "command": "node checkpoint.cjs (backup + SHA-256 manifest)",
+          "exitCode": 0,
+          "result": "sourceFiles 42, manifestLines 42, verified 42, mismatches [] -> dest C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z",
+          "artifact": "C:/Users/patri/roadflow-backups/roadflow-2026-10-13T04-10-15-770Z/MANIFEST.sha256"
+        },
+        {
+          "command": "cmp src/economy.js + cmp index.html (independent of manifest script)",
+          "exitCode": 0,
+          "result": "both IDENTICAL to source bytes",
+          "artifact": null
+        },
+        {
+          "command": "sha256sum -c MANIFEST.sha256",
+          "exitCode": 0,
+          "result": "all 42 entries OK; on-disk backup file count 42 equals manifest line count 42",
+          "artifact": null
+        },
+        {
+          "command": "git add .gitignore src test docs index.html README.md package.json package-lock.json server.js playtest.js soak.js",
+          "exitCode": 0,
+          "result": "43 staged. Zero paths outside project. Zero node_modules/shots/artifacts staged. Zero home-directory files (NTUSER/OneDrive/Downloads/.ssh/AppData) leaked. Staged-vs-manifest diff is exactly .gitignore (created after backup).",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 42, pass 42, fail 0, duration_ms 369.91 (baseline preserved)",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Operator decisions: local Git repo + external backup; ignore entire shots/ (36 script-generated captures, none authored).",
+        "No source files were edited by this task. Only additions: .gitignore and docs/roadmap/status.json notes.",
+        "Branch is main; no remote configured; nothing pushed."
+      ]
+    },
+    {
+      "id": "S00.2",
+      "status": "done",
+      "dependsOn": [
+        "S00.1"
+      ],
+      "file": "stages/00-safety.md",
+      "evidence": [
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 42, pass 42, fail 0, duration_ms 395.54 (unit suite stayed browser-free and unchanged)",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 6, pass 6, fail 0, duration_ms 5159.05. Cases: boot canvas/tools/speeds, road action adds edges, house consumes one and adds 4 residents, rejected shop placement consumes no stock, save writes parseable v1 snapshot with edges>0 and buildings>0, zero browser errors.",
+          "artifact": "artifacts/run-1791868317768"
+        },
+        {
+          "command": "node --test test/browser/_fail-probe.mjs (negative control, then deleted)",
+          "exitCode": 1,
+          "result": "Deliberately wrong expectation (pop 999) exited 1 with AssertionError. Probe logged observed population=4, batch.house=3, proving it reached the real assertion instead of failing early. Probe file removed afterwards.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s default. t+15s..t+90s samples logged; final pop 8, trips 10, avg 35s, level 1, xp 31.92%, cars 2. Assertions passed: maxCars>0, trips>=1, HUD trips matches economy, xp>0, zero non-finite or negative-speed vehicles, zero errors.",
+          "artifact": "artifacts/soak-1791868517540"
+        },
+        {
+          "command": "npm run test:playtest",
+          "exitCode": 0,
+          "result": "13-frame capture tour written; HUD pop 4, trips 0, level 1. trips 0 matches the pre-existing baseline (tour does not run long enough) and this script asserts no trip count. Zoom-out direction corrected: positive wheel delta now reduces zoom, matching the tour's comment.",
+          "artifact": "artifacts/playtest-1791868738673"
+        },
+        {
+          "command": "visual inspection of artifacts/run-*/02-road.png",
+          "exitCode": 0,
+          "result": "Real rendered frame, not blank: committed road with yellow centreline, Connect/Junction snap badge, HUD Population 0, tool badges House 4 / Shop 2 / Factory 1.",
+          "artifact": "artifacts/run-1791868317768/02-road.png"
+        }
+      ],
+      "notes": [
+        "Created: test/browser/harness.js, test/browser/smoke.js, scripts/verify-backup.mjs. Rewrote playtest.js and soak.js as assertion-capable ES modules importing the harness.",
+        "Harness owns only the server PID it spawned and the browser it launched; it refuses to test a page that does not look like Roadflow, and uses a free port so it never depends on or kills unrelated processes.",
+        "Artifacts now go to artifacts/<run-id>/ (gitignored). Original shots/ left untouched as historical evidence.",
+        "scripts/verify-backup.mjs added because 'sha256sum -c' resolves manifest paths against cwd, which caused a false 41-of-42 reading during S00.1. Verified: node scripts/verify-backup.mjs returns 42/42 with 0 failures.",
+        "Branch policy recorded in EXECUTOR.md section 5b."
+      ]
+    },
+    {
+      "id": "S00.3",
+      "status": "done",
+      "dependsOn": [
+        "S00.2"
+      ],
+      "file": "stages/00-safety.md",
+      "evidence": [
+        {
+          "command": "node scripts/make-legacy-fixture.mjs",
+          "exitCode": 0,
+          "result": "Wrote test/fixtures/legacy-v1.json: seed 1, 14 nodes, 14 edges, 3 buildings (house/shop/factory), 1 signal, 4 ring nodes, 4 ring edges, 4 one-way edges. Built through the real public APIs and serialized with the real toJSON() methods, so it is an authentic v1 payload rather than hand-written JSON.",
+          "artifact": "test/fixtures/legacy-v1.json"
+        },
+        {
+          "command": "round-trip probe through RoadNetwork.fromJSON + Economy.fromJSON",
+          "exitCode": 0,
+          "result": "nodes 14, edges 14, buildings 3, xp 120, trips 3 preserved; 0 integrity problems; house->shop route resolves (3 nodes, 25.0s).",
+          "artifact": null
+        },
+        {
+          "command": "node --test test/invariants.test.js",
+          "exitCode": 0,
+          "result": "tests 21, pass 21, fail 0. Includes 10 negative controls (assert.throws) proving each invariant helper rejects deliberately corrupted input, and a level-up threshold test.",
+          "artifact": null
+        },
+        {
+          "command": "npm test (full suite)",
+          "exitCode": 0,
+          "result": "tests 63, pass 63, fail 0, duration_ms 368.23. Was 42 before this task; +21 new, no existing test changed or removed.",
+          "artifact": null
+        },
+        {
+          "command": "level-up sensitivity probe",
+          "exitCode": 0,
+          "result": "Threshold LEVEL_XP(1)=300. No-factory fixture: 290 -> 300.000, crosses. With factory (pollution penalty): 290 -> 299.899, does not cross. The setup is tight to ~0.1 XP, proving the threshold test is not vacuous.",
+          "artifact": null
+        },
+        {
+          "command": "ring-structure inspection probe",
+          "exitCode": 0,
+          "result": "Each ring node has exactly 2 ring edges + 1 arm edge (degree 3); arm outer ends are degree 1. An initial assertion of mine wrongly expected total degree 2 and failed; the assertion was corrected to check ring-degree, not the source.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Created: test/fixtures/worlds.js (builders + loadLegacyV1 + routeBetween), test/helpers/invariants.js (assertGraphConsistent, assertVehiclesFinite, assertEconomyConsistent), test/invariants.test.js (21 tests), test/fixtures/legacy-v1.json, scripts/make-legacy-fixture.mjs.",
+        "Fixture builders expose semantic anchors (nodes/buildings/edges), so tests never depend on generated IDs. Terrain is mocked by default for noise-free geometry; the save fixture uses real Terrain because a save stores a seed.",
+        "eightCrossingsWorld's 8-junction target is recorded as a characterization test asserting today's 6, plus trackedGaps entry GAP-E05-crossings. Not a skipped test claiming coverage.",
+        "legacy-v1.json is frozen but NOT byte-reproducible: v1 uid() uses Math.random, so regenerating changes IDs. Documented in the generator. Deterministic IDs arrive in S01.1."
+      ]
+    },
+    {
+      "id": "S01.1",
+      "status": "done",
+      "dependsOn": [
+        "S00.3"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [
+        {
+          "command": "node --test test/simulationClock.test.js",
+          "exitCode": 0,
+          "result": "tests 11, pass 11, fail 0. Covers fixed STEP ticks, frame-partition equivalence at 1x/3x/8x, pause freezing time, long-stall dropping, tick-budget cap, reset, invalid-input rejection and sub-step remainder accumulation.",
+          "artifact": null
+        },
+        {
+          "command": "node --test test/coreState.test.js",
+          "exitCode": 0,
+          "result": "tests 15, pass 15, fail 0. Includes a golden-value test proving the makeRng output sequence is byte-identical to the pre-change implementation, RNG state save/restore replay, uint32 validation, and RoadNetwork deterministic-ID plus reserve-on-load behaviour.",
+          "artifact": null
+        },
+        {
+          "command": "node --test test/trafficAdvance.test.js",
+          "exitCode": 0,
+          "result": "tests 7, pass 7, fail 0. Overshoot carried across an edge boundary (s ~ 10 on the second edge, not 0), path progress continuous across 12 transitions, multi-edge crossing bounded, final-overshoot arrival counted once, speedFactor 1 with maxSpeed removed, injected RNG reproducible and demonstrably consulted, identical trajectories for identical seeds.",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 96, pass 96, fail 0, duration_ms 433.91. Was 63 before this task; +33 new. No existing test modified, weakened or removed.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 7, pass 7, fail 0. Added a clock test asserting pause freezes simulation time, 1x advances about 1s per wall second, and 8x outpaces 1x.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. Final pop 8, trips 10, avg 35s, level 1, xp 31.9201%, cars 2 - identical to the pre-change baseline, demonstrating behavioural equivalence of the fixed clock at 3x.",
+          "artifact": "artifacts/soak-1791875239243"
+        },
+        {
+          "command": "in-browser clock probe",
+          "exitCode": 0,
+          "result": "paused=0 (frozen), speed1=1.2167s, speed3=3.6500s, speed8=9.7333s over equal wall windows. Ratios 3x/1x=3.00 and 8x/1x=8.00. Zero browser errors. Previously the loop incremented traffic.time twice per frame, so 1x ran at roughly 2x.",
+          "artifact": null
+        },
+        {
+          "command": "in-browser determinism probe (seed 1, same three clicks, twice)",
+          "exitCode": 0,
+          "result": "Run A and Run B both produced 5 nodes, 4 edges, 2 buildings with identical node IDs (n1,n2,n4), identical edge IDs (e10,e11) and identical buildings. Pre-change, uid() used Math.random so IDs differed every run.",
+          "artifact": null
+        },
+        {
+          "command": "FOLLOW-UP S01.1b: node --test test/buildingIdentity.test.js",
+          "exitCode": 0,
+          "result": "tests 8, pass 8, fail 0. Before the fix 4 of these failed, exposing that building IDs were still random. Covers deterministic building IDs, sequential format, no collision with graph IDs, deterministic in-range rot, rot save/load round trip, reserve-on-load, legacy path, and a golden check that rot consumes no simulation-stream draw.",
+          "artifact": null
+        },
+        {
+          "command": "FOLLOW-UP S01.1b: in-browser determinism probe comparing IDs and rot",
+          "exitCode": 0,
+          "result": "nodeIds [n1,n2,n4], edgeIds [e5,e6], buildingIds [b7,b8] and rots [-0.24863..., 0.24052...] all identical across two runs of seed 1. The earlier probe compared buildings as type@x,y and therefore missed the random building IDs.",
+          "artifact": null
+        },
+        {
+          "command": "FOLLOW-UP S01.1b: mutation check",
+          "exitCode": 1,
+          "result": "Reverting _newBuildingId to uid() failed the unit suite (2 of 8) and the browser guard (1 of 8); restoring the fix returned both to 0 failures. Confirms the guards are not vacuous.",
+          "artifact": null
+        },
+        {
+          "command": "FOLLOW-UP S01.1b: npm run test:soak",
+          "exitCode": 0,
+          "result": "After splitting the cosmetic RNG stream, the 90s soak is byte-identical to the pre-change baseline: pop 8, trips 10, avg 35s, xp 31.9201%. An intermediate version that drew rot from the simulation stream produced 12 trips, which is why the streams were split.",
+          "artifact": "artifacts/soak-1791877688133"
+        },
+        {
+          "command": "FOLLOW-UP S01.1b: npm test + npm run test:browser",
+          "exitCode": 0,
+          "result": "unit tests 104, pass 104, fail 0; browser tests 8, pass 8, fail 0.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Created: src/simulationClock.js, test/simulationClock.test.js, test/coreState.test.js, test/trafficAdvance.test.js, test/buildingIdentity.test.js. Modified: src/core.js (RNG state access, createIdSource), src/roadNetwork.js (optional ids injection, _newId, reserve on fromJSON), src/traffic.js (injected rng, speedFactor replacing unused maxSpeed, residual-distance route advance), src/main.js (accumulator loop, world ID source, visibilitychange reset, building-ID reservation on load, removed Math.random rot), src/economy.js (live ID source, cosmetic RNG stream, rot, reserve on fromJSON).",
+        "Deliberate behaviour change: makeRng gains getState/setState WITHOUT altering its output sequence. Protected by a golden-value test captured from the pre-change implementation.",
+        "Deliberate behaviour change: traffic.time previously advanced twice per frame (simTime += dt then traffic.update(dt) incremented again). Now the clock is the only source and the renderer reads traffic.time.",
+        "Discovered GAP-min-segment-length while writing tests: segments shorter than NODE_SNAP (18 wu) silently build nothing. Recorded as a tracked gap owned by S03.2, not silently worked around.",
+        "Three test-authoring errors were found and corrected rather than loosened: (1) a golden capture using toFixed(17) did not round-trip doubles, replaced with String(v); (2) stepBefore was captured after sim.update so transitions never counted; (3) an earlier determinism probe compared buildings by type@x,y instead of by ID and so missed random building IDs. All were verification weaknesses, not source bugs.",
+        "Follow-up S01.1b exists because the original S01.1 determinism claim was incomplete: nodes and edges were deterministic but buildings were not, and rot used Math.random. Recorded in EVIDENCE E10/E11 rather than quietly patched."
+      ]
+    },
+    {
+      "id": "S01.2",
+      "status": "done",
+      "dependsOn": [
+        "S01.1"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [
+        {
+          "command": "node --test test/returnDispatch.test.js",
+          "exitCode": 0,
+          "result": "tests 12, pass 12, fail 0. Before the fix 8 of these failed. Covers access-node resolution, re-attachment during dwell, blocked-spawn retry, deleted origin/destination/noAccessNode cancellation with reasons, no duplicate cancellation, no second XP reward, removal of the no-op setTimeout, a full outbound-dwell-return integration, and two characterization tests pinning that pending returns are not yet persisted (S01.7).",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 117, pass 117, fail 0, duration_ms 451.10. Was 104 before this task; +13 new. No existing test weakened or removed.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 8, pass 8, fail 0.",
+          "artifact": null
+        },
+        {
+          "command": "in-browser return-lifecycle probe (seed 1, loop road, 2 houses + 1 shop, 3x)",
+          "exitCode": 0,
+          "result": "t+32s outbound completes: trips=1, pendingReturns=1. t+40s: a car with purpose='return' is driving, pendingReturns=0. t+48s next outbound starts. cancelledReturns=0, all cancellation reasons 0, zero browser errors. Proves returns genuinely spawn rather than failing silently.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. Changed from the S01.1 baseline (10 trips, 2 cars, 0% congestion) to 8 trips, 8 cars, 2% congestion. Expected consequence of returns now spawning cars onto the same network, not a regression; the trips>=1 gate still passes.",
+          "artifact": "artifacts/soak-1791884080415"
+        },
+        {
+          "command": "mutation check: revert spawnCar(fromNode,toNode) to spawnCar(r.from,r.to)",
+          "exitCode": 1,
+          "result": "3 of 12 tests failed; restoring the fix returned to 0 failures. Confirms the guards are not vacuous.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Modified src/economy.js: _pendingReturns/cancelledReturns/cancellationReasons in the constructor, pendingReturnCount getter, Economy.RETURN_RETRY_SECONDS=2, _cancelReturn helper, rewritten _completeTrip (no-op setTimeout removed) and processReturns (dispatch-time resolution, retry on blocked spawn, cancel with reason). Created test/returnDispatch.test.js.",
+        "Returns store BUILDING ids and resolve to access nodes at dispatch time, so a building deleted, moved or re-attached during the dwell is handled correctly rather than spawning a car to a stale node.",
+        "Test-authoring error found and corrected rather than loosened: my first two cancellation tests had the return trip's origin and destination swapped (the return departs the shop and ends at the home). Renamed and rewritten to test each path accurately, and added a third case for a vanished access node.",
+        "Second test-authoring error: the legacy-fixture path used ../fixtures/ from a file already inside test/, which resolved to a non-existent roadflow/fixtures/. Corrected to ./fixtures/.",
+        "Deliberately did NOT add pending-return persistence: the plan assigns the full snapshot to S01.7, and a partial implementation would have to be undone. Recorded as GAP-pending-returns-not-saved with characterization tests instead."
+      ]
+    },
+    {
+      "id": "S01.3",
+      "status": "done",
+      "dependsOn": [
+        "S01.2"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [
+        {
+          "command": "node --test test/roadDimensions.test.js",
+          "exitCode": 0,
+          "result": "tests 14, pass 14, fail 0. Before the fix the file could not even import (no roadProfiles.js). Covers the containment rule for every preset/direction/lane, pavement-width formula, width hierarchy, forward/backward mirror symmetry, outward lane ordering, out-of-range lane rejection, one-way centring, RoadNetwork.laneOffset agreement, lanePoint containment, preserved right-of-direction behaviour, ring edges, roundabout radius and ROAD_CLASS/profile consistency.",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 133, pass 133, fail 0, duration_ms 614.91. Was 119 before this task; +14 new. The original 42 tests still pass unchanged.",
+          "artifact": null
+        },
+        {
+          "command": "in-browser containment probe (12 lanes, all three classes)",
+          "exitCode": 0,
+          "result": "Pavement halves: street 8.1, avenue 13.6, highway 19.6. Lanes measured 12, containment violations 0. Worst case avenue dir 1 lane 1: lateral 9.6, vehicle outer 11.4, half 13.6 -> 2.2 wu of slack INSIDE the pavement, where it previously overflowed by 3.4.",
+          "artifact": null
+        },
+        {
+          "command": "visual capture before and after (scripts/capture-road-classes.mjs)",
+          "exitCode": 0,
+          "result": "Six frames each at DPR 1/2 and zoom 0.25/1/3. Before: on the avenue the lane dashes sat at the very edge of the white surface and a car hung partly off the pavement. After: dashes sit clearly inside, the car is fully on the road, and the three classes read as street < avenue < highway by width.",
+          "artifact": "artifacts/before-s013, artifacts/after-s013"
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 8, pass 8, fail 0.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s, byte-identical to the S01.2 result: pop 8, trips 8, avg 33s, congestion 2%, xp 25.5361%, cars 8. Confirms simulation is untouched, because lane CENTRES did not move - only the drawn pavement widened.",
+          "artifact": "artifacts/soak-1791887000237"
+        },
+        {
+          "command": "mutation check A (revert lane offset formula)",
+          "exitCode": 1,
+          "result": "Only 1 incidental failure (a one-way centring case). This exposed that reverting the offset does NOT reproduce the original bug, because lane offsets were already correct.",
+          "artifact": null
+        },
+        {
+          "command": "mutation check B (revert pavement width to 11/16/24 - the accurate mutation)",
+          "exitCode": 1,
+          "result": "4 of 14 tests failed with exactly the E02 numbers: 'street dir 1 lane 0: vehicle outer edge 5.650 exceeds pavement half-width 5.500' and 'dir 1 lane 2: lateral 15.600 + half car exceeds 12.000'. Restoring returned to 0 failures.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Created: src/roadProfiles.js (roadDimensions, laneCenterOffset, outerLaneOffset, ROAD_PRESETS, CAR_HALF_WIDTH), test/roadDimensions.test.js, scripts/capture-road-classes.mjs. Modified: src/roadNetwork.js (imports the profile model, derives ROAD_CLASS width/lanesPerDir/laneW from it at load, laneOffset/lanePoint delegate, roundabout max-arm-width and ring class use roadDimensions), src/render.js (casing, shadow, fill, lane dashes, centreline, road preview and congestion overlay all use roadDimensions), src/main.js (exposed renderer on __rf so visual tests can set the camera precisely).",
+        "IMPORTANT CORRECTION: the lane offsets were already correct. The real defect was a too-narrow pavement (hand-chosen 11/16/24 that did not follow from the lane formula). My first mutation reverted the offset and proved nothing; the accurate mutation reverts the width. Recorded in EVIDENCE E02 so the wrong half of the inconsistency is not re-tested.",
+        "Lane divider dashes are now positioned from the same lane-centre model that places vehicles, so a dash always sits exactly between two lanes rather than at a hard-coded offset. Centreline is omitted on one-way roads, which have no centre division.",
+        "ROAD_CLASS.width/lanesPerDir/laneW are recomputed from roadProfiles at module load rather than deleted, so existing callers and the original test asserting highway > avenue > street width keep working without a second source of truth.",
+        "capture-road-classes.mjs initially placed roads at world y=-260, which mapped to screen y=140 - under the HUD card - so the clicks hit the HUD and no road was built. Fixed by framing the camera so the road band maps to screen y=400, clear of the HUD and the bottom dock. Also added a spine road so all three classes carry vehicles rather than only the nearest one.",
+        "The renderer hook on __rf is read/write for tests only; gameplay never reads from __rf."
+      ]
+    },
+    {
+      "id": "S01.4",
+      "status": "done",
+      "dependsOn": [
+        "S01.3"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [
+        {
+          "command": "node --test test/signals.test.js test/congestion.test.js",
+          "exitCode": 0,
+          "result": "tests 30, pass 30, fail 0. Before the fix both files failed to import (no signals.js or metrics.js). Covers the phase layout (green 2.94 / yellow 2.00 / all-red 2.06 for cycle 14 ratio 0.42), phase ordering, axis switching and cycle wrap, all-red clearance at the end of each half-cycle, countdown bounds, invalid-cycle and non-finite-time rejection, ratio clamping, offset normalisation, the yellow cap, axis permission helpers, and that both axes are never green together. Congestion side covers convergence to 1, timestep independence at 60/30/120 Hz, the closed-form EMA value, decay when empty, clamping, vehicle-weighted city aggregation, and stats fields.",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 164, pass 164, fail 0, duration_ms 783.24. Was 133 before this task; +31 new.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 10, pass 10, fail 0. Two new checks: the HUD congestion text equals the shared metric (proving the old /0.6 rescale is gone), and a PIXEL-LEVEL check that the drawn signal dot colour matches getLegacyPhase at t=1 (green), 5 (yellow), 8 (all-red) and 11 (axis y green, so the dot is red).",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. Trips 8 and cars 8 as before, but congestion now honestly reports 94% at the end instead of 2%. Investigated rather than accepted: see GAP-loop-gridlock.",
+          "artifact": "artifacts/soak-1791888280589"
+        },
+        {
+          "command": "node scripts/diagnose-gridlock.mjs",
+          "exitCode": 1,
+          "result": "Revealed a pre-existing gridlock. All 8 vehicles stopped, several for 69s, city congestion 92%. Running the same scenario with congestion-aware routing DISABLED reproduced it identically (8 stopped, 68.9s), proving the deadlock is not caused by the new congestion values. Every stuck vehicle had nextNodeDegree=6.",
+          "artifact": "scripts/diagnose-gridlock.mjs"
+        },
+        {
+          "command": "addRoad topology probe (one call versus four)",
+          "exitCode": 0,
+          "result": "One addRoad call for a four-corner loop produced 6 edges, 5 nodes, a degree-6 hub at (150,30) and TWO separate degree-1 nodes both at (-250,30) - the loop never closed. Four two-point calls produced the expected 4 edges and a clean degree-2 ring, with 10 completed trips and 4 vehicles instead of 8 gridlocked. Recorded as GAP-addroad-multipoint-topology, owned by S01.5.",
+          "artifact": null
+        },
+        {
+          "command": "mutation check: restore the original congestion EMA scaling",
+          "exitCode": 1,
+          "result": "Reverting to `old * 0.98 + frac * 0.02 * (dt * 60) * 0.05` fails the convergence and timestep-independence tests; restoring returns to 0 failures.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Created: src/signals.js (getLegacyPhase, phaseForAxis, limits), src/metrics.js (cityCongestion, formatCongestion, simulationStats, clamp01), test/signals.test.js, test/congestion.test.js, scripts/diagnose-gridlock.mjs. Modified: src/traffic.js (CONGESTION_TAU, timestep-independent EMA, publishes edge._carCount, shared phase authority in _mustYield), src/render.js (_drawNode uses getLegacyPhase and shows amber for yellow), src/main.js (HUD uses cityCongestion/formatCongestion, removed the /0.6 fudge, removed the duplicate simTime counter so the renderer reads traffic.time), test/traffic.test.js (rewrote the light test), test/browser/smoke.js (two new checks).",
+        "REWRITTEN TEST, not weakened: the original 'traffic light stops cross traffic during red' test assumed edges[0] was horizontal (it is vertical) and hard-coded 'x' as the car's axis while using the OLD half-cycle formula to decide what counted as red. Its red detection was therefore inverted for the car it spawned and it only passed by accident. The replacement classifies each approach by real geometry and uses the shared phase authority. A follow-up assertion that every non-green car must hold was itself too strict: yellow for your own axis legitimately permits clearing, so the test now exempts that documented case.",
+        "Also removed a duplicate `traffic.time = data.simTime` assignment found while deleting the simTime counter.",
+        "The congestion fix REVEALED a pre-existing gridlock rather than causing one: proven by disabling congestion-aware routing and reproducing the identical deadlock. Recorded as GAP-loop-gridlock with a reproducible diagnostic script.",
+        "The gridlock's primary cause was then traced to addRoad topology (GAP-addroad-multipoint-topology): a four-corner loop drawn in one stroke becomes a degree-6 hub plus disconnected stubs. Deliberately NOT patched here - S01.5 owns addRoad geometry and S04.2/S04.6 own junction yielding, and a band-aid would conflict with both."
+      ]
+    },
+    {
+      "id": "S01.5",
+      "status": "done",
+      "dependsOn": [
+        "S01.4"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [
+        {
+          "command": "node --test test/construction.test.js",
+          "exitCode": 0,
+          "result": "tests 20, pass 20, fail 0. Before the fix 9 failed. Covers continuous multi-point paths with no doubling back, no spurious mid-path junctions, closed-loop closure and connectivity, absence of a degree-6 hub, one-call matching four-call topology, shared endpoints, mid-edge landing, duplicate rejection, 8 and 20 crossing resolution, single crossing, no duplicate coincident junctions, one-way preservation across a split, roundabout ring flags, split class and length preservation, explicit short-segment rejection, degenerate and single-point rejection, and a 12-point road staying one component.",
+          "artifact": null
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 184, pass 184, fail 0. Was 164 before this task. This run also flips the S00.3 characterization test from 6 to the 8-junction target, since the resolver no longer truncates.",
+          "artifact": null
+        },
+        {
+          "command": "topology probe: loop drawn as one addRoad call",
+          "exitCode": 0,
+          "result": "4 edges, 4 nodes, all degree 2, reason null. Before: 6 edges, 5 nodes, a degree-6 hub at (150,30) and two separate degree-1 nodes both at (-250,30). After adding four buildings: 8 edges / 8 nodes, every node degree <= 2.",
+          "artifact": null
+        },
+        {
+          "command": "eightCrossingsWorld probe",
+          "exitCode": 0,
+          "result": "8 junctions at x = 0,100,200,300,400,500,600,700, max degree 4. Previously 6.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 10, pass 10, fail 0.",
+          "artifact": null
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. City congestion 94% -> 43% and average trip 33s -> 28s versus S01.4, so the topology repair measurably helped. Trips 8, cars 7. Still congested: see GAP-loop-gridlock.",
+          "artifact": "artifacts/soak-1791954759665"
+        },
+        {
+          "command": "node scripts/diagnose-gridlock.mjs",
+          "exitCode": 1,
+          "result": "Deadlock reduced from 8 of 8 stopped (69s max wait) to 3 of 7, but NOT eliminated. Residual cause traced to mutual yielding at a degree-2 node: car 7 on e8 and car 10 on e23 stop 1.5 wu short of the same node and each waits for the other, via the yield-to-the-right scan and the occupied-zone check respectively.",
+          "artifact": "scripts/diagnose-gridlock.mjs"
+        },
+        {
+          "command": "mutation checks A/B/C",
+          "exitCode": 1,
+          "result": "A: crossing budget back to 12 -> 2 failures. B: drop oneway/ring metadata on split -> 1 failure. C: remove closed-loop node reuse -> 2 failures. Restoring each returned to 0. Mutation B initially PASSED, exposing that my first metadata test only checked makeRoundabout output (which sets flags directly) and never exercised splitEdge; rewritten to split a one-way edge via a landing road, the reachable path since _snapPoint skips ring edges but not one-way ones.",
+          "artifact": null
+        }
+      ],
+      "notes": [
+        "Modified src/roadNetwork.js: addRoad rewritten to sample the control path once and segment it at real junctions/endpoints; new helpers slicePolyline, controlArcPositions, _stationNode, _rollback, _makeEdgeFromPts, _decimateForControls; resolveCrossings rewritten as a bounded frontier walk returning success/failure; splitEdge rewritten to slice the polyline exactly, require a strictly interior split point, and preserve oneway/ring metadata; toJSON now serializes pts and fromJSON prefers saved pts (falling back to control resampling for v1 saves); removed dead _link and _resolveEndpoint plus unused clamp/segDist imports. Created test/construction.test.js.",
+        "addRoad now returns {nodeIds, edgeIds, reason} with reason null on success. Callers reading only nodeIds/edgeIds keep working.",
+        "Failed constructions roll back completely: created edges and nodes are removed and net.version restored, so a rejected road leaves the graph byte-identical.",
+        "Closed GAP-E05-crossings and GAP-addroad-multipoint-topology. CORRECTED the GAP-loop-gridlock root-cause claim: malformed topology was only part of the cause (94% -> 43% congestion); the residual deadlock is degree-2 mutual yielding, owned by S04.2 and deliberately not band-aided here because S04.2 replaces the yielding model.",
+        "GAP-min-segment-length is half-closed: short segments are rejected with an explicit reason instead of silently doing nothing. Making them BUILDABLE remains S03.2/S04.3 work.",
+        "Resumed after an interrupted session: the previous run left _makeEdgeFromPts referenced but undefined with 119 tests failing. Completed the missing helper, the splitEdge rewrite, the serialization change and the dead-code removal, then verified from a clean full-suite run."
+      ]
+    },
+    {
+      "id": "S01.6",
+      "status": "pending",
+      "dependsOn": [
+        "S01.5"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S01.7",
+      "status": "pending",
+      "dependsOn": [
+        "S01.6"
+      ],
+      "file": "stages/01-foundation.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S02.1",
+      "status": "pending",
+      "dependsOn": [
+        "S01.7"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S02.2",
+      "status": "pending",
+      "dependsOn": [
+        "S02.1"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S02.3",
+      "status": "pending",
+      "dependsOn": [
+        "S02.2"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S02.4",
+      "status": "pending",
+      "dependsOn": [
+        "S02.3"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S02.5",
+      "status": "pending",
+      "dependsOn": [
+        "S02.4"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S02.6",
+      "status": "pending",
+      "dependsOn": [
+        "S02.5"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S03.1",
+      "status": "pending",
+      "dependsOn": [
+        "S02.6"
+      ],
+      "file": "stages/03-construction.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S03.2",
+      "status": "pending",
+      "dependsOn": [
+        "S03.1"
+      ],
+      "file": "stages/03-construction.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S03.3",
+      "status": "pending",
+      "dependsOn": [
+        "S03.2"
+      ],
+      "file": "stages/03-construction.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S03.4",
+      "status": "pending",
+      "dependsOn": [
+        "S03.3"
+      ],
+      "file": "stages/03-construction.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S03.5",
+      "status": "pending",
+      "dependsOn": [
+        "S03.4"
+      ],
+      "file": "stages/03-construction.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S04.1",
+      "status": "pending",
+      "dependsOn": [
+        "S03.5"
+      ],
+      "file": "stages/04-traffic.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S04.2",
+      "status": "pending",
+      "dependsOn": [
+        "S04.1"
+      ],
+      "file": "stages/04-traffic.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S04.3",
+      "status": "pending",
+      "dependsOn": [
+        "S04.2"
+      ],
+      "file": "stages/04-traffic.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S04.4",
+      "status": "pending",
+      "dependsOn": [
+        "S04.3"
+      ],
+      "file": "stages/04-traffic.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S04.5",
+      "status": "pending",
+      "dependsOn": [
+        "S04.4"
+      ],
+      "file": "stages/04-traffic.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S04.6",
+      "status": "pending",
+      "dependsOn": [
+        "S04.5"
+      ],
+      "file": "stages/04-traffic.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S05.1",
+      "status": "pending",
+      "dependsOn": [
+        "S04.6"
+      ],
+      "file": "stages/05-elevation.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S05.2",
+      "status": "pending",
+      "dependsOn": [
+        "S05.1"
+      ],
+      "file": "stages/05-elevation.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S05.3",
+      "status": "pending",
+      "dependsOn": [
+        "S05.2"
+      ],
+      "file": "stages/05-elevation.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S05.4",
+      "status": "pending",
+      "dependsOn": [
+        "S05.3"
+      ],
+      "file": "stages/05-elevation.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S06.1",
+      "status": "pending",
+      "dependsOn": [
+        "S05.4"
+      ],
+      "file": "stages/06-city.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S06.2",
+      "status": "pending",
+      "dependsOn": [
+        "S06.1"
+      ],
+      "file": "stages/06-city.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S06.3",
+      "status": "pending",
+      "dependsOn": [
+        "S06.2"
+      ],
+      "file": "stages/06-city.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S06.4",
+      "status": "pending",
+      "dependsOn": [
+        "S06.3"
+      ],
+      "file": "stages/06-city.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S06.5",
+      "status": "pending",
+      "dependsOn": [
+        "S06.4"
+      ],
+      "file": "stages/06-city.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S06.6",
+      "status": "pending",
+      "dependsOn": [
+        "S06.5"
+      ],
+      "file": "stages/06-city.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.1",
+      "status": "pending",
+      "dependsOn": [
+        "S06.6"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.2",
+      "status": "pending",
+      "dependsOn": [
+        "S07.1"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.3",
+      "status": "pending",
+      "dependsOn": [
+        "S07.2"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.4",
+      "status": "pending",
+      "dependsOn": [
+        "S07.3"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.5",
+      "status": "pending",
+      "dependsOn": [
+        "S07.4"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.6",
+      "status": "pending",
+      "dependsOn": [
+        "S07.5"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S07.7",
+      "status": "pending",
+      "dependsOn": [
+        "S07.6"
+      ],
+      "file": "stages/07-depth.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S08.1",
+      "status": "pending",
+      "dependsOn": [
+        "S07.7"
+      ],
+      "file": "stages/08-release.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S08.2",
+      "status": "pending",
+      "dependsOn": [
+        "S08.1"
+      ],
+      "file": "stages/08-release.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S08.3",
+      "status": "pending",
+      "dependsOn": [
+        "S08.2"
+      ],
+      "file": "stages/08-release.md",
+      "evidence": [],
+      "notes": []
+    },
+    {
+      "id": "S08.4",
+      "status": "pending",
+      "dependsOn": [
+        "S08.3"
+      ],
+      "file": "stages/08-release.md",
+      "evidence": [],
+      "notes": []
+    }
   ],
   "planAmendments": [],
-  "review": {"mode":"self-review","independentReviewPerformed":false,"report":"REVIEW.md"}
+  "review": {
+    "mode": "self-review",
+    "independentReviewPerformed": false,
+    "report": "REVIEW.md"
+  },
+  "closedGaps": [
+    {
+      "id": "GAP-E05-crossings",
+      "closedBy": "S01.5",
+      "summary": "eightCrossingsWorld resolves 6 junctions instead of the expected 8.",
+      "fix": "resolveCrossings walks a frontier of edges and keeps splitting until no crossing remains, bounded by max(200, edges*8). Each split replaces one edge with two so the edge count strictly increases; budget exhaustion returns false so the caller rolls the whole transaction back.",
+      "verification": "eightCrossingsWorld reports 8 junctions at x=0..700; a 20-crossing fixture reports 20. Mutation (budget 12) fails 2 tests.",
+      "evidence": "EVIDENCE.md E05"
+    },
+    {
+      "id": "GAP-addroad-multipoint-topology",
+      "closedBy": "S01.5",
+      "summary": "addRoad with more than two control points produces malformed topology. A four-corner closed loop drawn as ONE call yields 6 edges and 5 nodes (expected 4 edges) including a degree-6 hub and TWO separate nodes at identical coordinates, so the loop never closes.",
+      "fix": "addRoad samples the whole control path once and segments it at real junctions and endpoints only, slicing the sampled polyline instead of re-splicing repeated control prefixes. A path returning to its own start reuses the first station node.",
+      "verification": "Soak loop is now 4 edges / 4 nodes all degree 2 (was 6 edges, degree-6 hub, duplicate coincident nodes). One-call loop matches four-call topology. Mutation fails 2 tests.",
+      "evidence": "EVIDENCE.md E12"
+    }
+  ]
 }

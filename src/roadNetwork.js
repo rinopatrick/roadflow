@@ -8,7 +8,7 @@
 //
 // Roads are drawn by the player as sequences of control points; new roads snap
 // to existing nodes and can split existing edges, producing real junctions.
-import { dist, splinePoints, polylineLengths, projectOnPolyline, pointAt, clamp, segDist, uid } from './core.js';
+import { dist, splinePoints, polylineLengths, projectOnPolyline, pointAt, uid } from './core.js';
 import { roadDimensions, laneCenterOffset, outerLaneOffset } from './roadProfiles.js';
 
 // `width` and `lanesPerDir` are kept for backwards compatibility with existing
@@ -32,6 +32,52 @@ for (const cls of Object.keys(ROAD_CLASS)) {
 const NODE_SNAP = 18;      // snap to existing node within this dist
 const EDGE_SNAP = 12;      // split existing edge within this dist
 
+/** Shortest edge a construction path will create, in wu. */
+const MIN_EDGE_LENGTH = 1;
+
+/**
+ * Interpolated polyline slice from arc `s0` to arc `s1`, inclusive of both ends.
+ *
+ * Used instead of re-splining a subset of control points, because re-splining a
+ * subset produces a DIFFERENT curve from the one the player drew (EVIDENCE E12).
+ * Returns null when the slice would have fewer than two distinct points.
+ */
+function slicePolyline(pts, cum, s0, s1) {
+  const out = [];
+  const a = pointAt(pts, cum, s0);
+  out.push([a.x, a.y]);
+  for (let i = 0; i < pts.length; i++) {
+    const c = cum[i];
+    if (c > s0 + 1e-6 && c < s1 - 1e-6) out.push([pts[i][0], pts[i][1]]);
+  }
+  const b = pointAt(pts, cum, s1);
+  out.push([b.x, b.y]);
+
+  // Collapse consecutive duplicates so the polyline has no zero-length runs.
+  const dedup = [];
+  for (const p of out) {
+    const last = dedup[dedup.length - 1];
+    if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 1e-6) dedup.push(p);
+  }
+  return dedup.length >= 2 ? dedup : null;
+}
+
+/**
+ * Arc position of each control point along the sampled path.
+ * `splinePoints` emits samples per control SEGMENT, so the first sample whose
+ * `segIdx` equals `i` is where control point `i` sits; the final control point is
+ * the last sample.
+ */
+function controlArcPositions(controlCount, segIdx, cum, pts) {
+  const sampleOf = new Array(controlCount).fill(undefined);
+  for (let k = 0; k < segIdx.length; k++) {
+    const si = segIdx[k];
+    if (si >= 0 && si < controlCount && sampleOf[si] === undefined) sampleOf[si] = k;
+  }
+  sampleOf[controlCount - 1] = pts.length - 1;
+  return sampleOf.map(k => cum[k === undefined ? pts.length - 1 : k]);
+}
+
 export class RoadNetwork {
   // ids: optional createIdSource(). When supplied, generated node/edge IDs are
   // deterministic and survive save/load; without it, legacy uid() behaviour is
@@ -54,83 +100,208 @@ export class RoadNetwork {
 
   // ---------- construction ----------
 
-  // controls: [[x,y], ...] world coords. cls: 'street'|'avenue'|'highway'
-  // Returns { nodeIds, edgeIds } created/touched.
+  /**
+   * Build a road from a sequence of clicked control points.
+   *
+   * Semantics (S01.5):
+   *  - the control sequence is ONE continuous path, not a chain of overlapping
+   *    sub-splines. The previous implementation passed `controls.slice(1, i)` as
+   *    each link's midpoints, so every link repeated all earlier points and each
+   *    spline doubled back through its own start node (EVIDENCE E12).
+   *  - graph segmentation happens at real junctions and endpoints only: the two
+   *    ends, plus any control point that lands on existing topology.
+   *  - a path that returns to its own start is treated as a closed loop and is
+   *    segmented at its clicked corners, so it forms a proper ring.
+   *  - on failure the graph is left exactly as it was, and `reason` explains why.
+   *
+   * @param {Array<[number,number]>} controls world coordinates
+   * @param {'street'|'avenue'|'highway'} [cls]
+   * @returns {{nodeIds:string[], edgeIds:string[], reason:null|string}}
+   */
   addRoad(controls, cls = 'street') {
-    const created = { nodeIds: [], edgeIds: [] };
-    if (controls.length < 2) return created;
+    const created = { nodeIds: [], edgeIds: [], reason: null };
+    const versionBefore = this.version;
 
-    // Resolve endpoints (and intermediate points) with snapping
-    const resolved = [];
-    for (let i = 0; i < controls.length; i++) {
-      const [x, y] = controls[i];
-      const snap = this._snapPoint(x, y);
-      resolved.push({ x, y, snap });
+    if (!Array.isArray(controls) || controls.length < 2) {
+      created.reason = 'a road needs at least two points';
+      return created;
     }
 
-    let prev = this._resolveEndpoint(resolved[0], created);
+    const n = controls.length;
+    const first = controls[0];
+    const last = controls[n - 1];
+    const span = Math.hypot(last[0] - first[0], last[1] - first[1]);
 
-    for (let i = 1; i < resolved.length; i++) {
-      const r = resolved[i];
-      const isLast = i === resolved.length - 1;
-
-      // intermediate points never snap to edges (only endpoints do)
-      const snap = isLast ? r.snap : (this._snapNode(r.x, r.y));
-
-      if (snap && snap.kind === 'node') {
-        const node = this.nodes.get(snap.id);
-        if (node && node.id !== prev) {
-          this._link(prev, node.id, controls.slice(1, i), cls, created, i);
-          prev = node.id;
-        }
-        continue;
-      }
-      if (snap && snap.kind === 'edgeSplit') {
-        const newNode = this.splitEdge(snap.edgeId, snap.s);
-        this._link(prev, newNode.id, controls.slice(1, i), cls, created, i);
-        prev = newNode.id;
-        continue;
-      }
-
-      // plain new node
-      const node = this._makeNode(r.x, r.y, 'plain');
-      created.nodeIds.push(node.id);
-      this._link(prev, node.id, controls.slice(1, i), cls, created, i);
-      prev = node.id;
+    // Reject a path whose points are all in one place.
+    const anyDistinct = controls.some(p =>
+      Math.hypot(p[0] - first[0], p[1] - first[1]) >= MIN_EDGE_LENGTH);
+    if (!anyDistinct) {
+      created.reason = 'all points are at the same location';
+      return created;
     }
-    this.resolveCrossings(created.edgeIds);
+
+    // 1. Authoritative geometry for the whole path.
+    const { pts, segIdx } = splinePoints(controls, 12);
+    const { cum, total } = polylineLengths(pts);
+    if (!(total >= MIN_EDGE_LENGTH)) {
+      created.reason = 'the road is too short to build';
+      return created;
+    }
+    const ctrlArc = controlArcPositions(n, segIdx, cum, pts);
+
+    // 2. Decide where to segment.
+    const closed = span < NODE_SNAP;
+    const candidates = [];
+    if (closed) {
+      for (let i = 0; i < n - 1; i++) candidates.push(i); // last duplicates the first
+      candidates.push(n - 1);
+    } else {
+      candidates.push(0, n - 1);
+    }
+    // Intermediate points that land on existing topology become junctions.
+    for (let i = 1; i < n - 1; i++) {
+      const snap = this._snapPoint(controls[i][0], controls[i][1]);
+      if (snap && !candidates.includes(i)) candidates.push(i);
+    }
+    candidates.sort((a, b) => a - b);
+
+    const stations = candidates.map((i) => {
+      const at = pointAt(pts, cum, ctrlArc[i]);
+      return {
+        s: ctrlArc[i],
+        at: [at.x, at.y],
+        snap: this._snapPoint(controls[i][0], controls[i][1]),
+        node: null,
+      };
+    });
+
+    // 3. Create nodes and edges between consecutive stations.
+    const lastIndex = stations.length - 1;
+    for (let j = 0; j < lastIndex; j++) {
+      const A = stations[j];
+      const B = stations[j + 1];
+      if (!(B.s - A.s >= MIN_EDGE_LENGTH)) continue;
+
+      if (!A.node) A.node = this._stationNode(A, created);
+      if (!B.node) {
+        // A closed loop ends where it began, so reuse the first station's node
+        // rather than creating a second node at the same coordinates.
+        B.node = (closed && j + 1 === lastIndex && stations[0].node)
+          ? stations[0].node
+          : this._stationNode(B, created);
+      }
+      if (!A.node || !B.node || A.node.id === B.node.id) continue;
+      if (this.edgeBetween(A.node.id, B.node.id)) continue;
+
+      const slice = slicePolyline(pts, cum, A.s, B.s);
+      if (!slice) continue;
+
+      const edge = this._makeEdgeFromPts(A.node.id, B.node.id, cls, slice);
+      created.edgeIds.push(edge.id);
+    }
+
+    if (!created.edgeIds.length) {
+      this._rollback(created, versionBefore);
+      created.reason = `the road is shorter than the snapping distance `
+        + `(${NODE_SNAP} wu), so its ends would land on the same node`;
+      return created;
+    }
+
+    const resolved = this.resolveCrossings(created.edgeIds);
+    if (!resolved) {
+      this._rollback(created, versionBefore);
+      created.reason = 'the road could not be resolved against existing roads';
+      return created;
+    }
+
     this.version++;
     return created;
   }
 
-  // Roads that geometrically cross must become real junctions (like the genre
-  // standard). Detect polyline intersections between new edges and all others;
-  // split both edges at the crossing point so cars can pass through.
+  /** Node for a segmentation station: reuse a snapped node, split an edge, or create one. */
+  _stationNode(station, created) {
+    if (station.node) return station.node;
+
+    if (station.snap && station.snap.kind === 'node') {
+      const existing = this.nodes.get(station.snap.id);
+      if (existing) { station.node = existing; return existing; }
+    }
+    if (station.snap && station.snap.kind === 'edgeSplit') {
+      const split = this.splitEdge(station.snap.edgeId, station.snap.s);
+      if (split) { station.node = split; return split; }
+    }
+
+    const node = this._makeNode(station.at[0], station.at[1], 'plain');
+    created.nodeIds.push(node.id);
+    station.node = node;
+    return node;
+  }
+
+  /** Undoes the nodes/edges a failed construction created, and restores `version`. */
+  _rollback(created, versionBefore) {
+    for (const eid of [...created.edgeIds]) this.removeEdge(eid, true);
+    for (const nid of [...created.nodeIds]) {
+      const node = this.nodes.get(nid);
+      if (node && node.edges.size === 0) this.nodes.delete(nid);
+    }
+    created.edgeIds.length = 0;
+    created.nodeIds.length = 0;
+    this.version = versionBefore;
+  }
+
+  /**
+   * Turns every geometric crossing between the given edges and the rest of the
+   * network into a real junction.
+   *
+   * The previous version stopped after a fixed six iterations, so a road crossing
+   * eight others produced only six junctions (EVIDENCE E05). This walks a frontier
+   * of edges and keeps splitting until no crossing remains, bounded by a budget
+   * derived from the network size. Each split replaces one edge with two, so the
+   * edge count strictly increases and the loop terminates.
+   *
+   * @returns {boolean} false when the budget was exhausted (caller must roll back)
+   */
   resolveCrossings(edgeIds) {
-    let frontier = new Set(edgeIds);
-    for (let iter = 0; iter < 6; iter++) {
-      let changed = false;
-      outer:
-      for (const aId of frontier) {
+    const budget = Math.max(200, this.edges.size * 8);
+    let splits = 0;
+    const frontier = new Set(edgeIds.filter(id => this.edges.has(id)));
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const allIds = [...this.edges.keys()];
+
+      scan:
+      for (const aId of [...frontier]) {
         const a = this.edges.get(aId);
-        if (!a) continue;
-        for (const bId of this.edges.keys()) {
+        if (!a) { frontier.delete(aId); continue; }
+
+        for (const bId of allIds) {
           if (aId === bId) continue;
           const b = this.edges.get(bId);
           if (!b) continue;
+          // Edges already sharing a node meet there, not at a crossing.
           if (a.a === b.a || a.a === b.b || a.b === b.a || a.b === b.b) continue;
+
           const x = this._crossPoint(a, b);
-          if (x) {
-            this.splitEdge(aId, x.s1);
-            this.splitEdge(bId, x.s2);
-            changed = true;
-            frontier = new Set([...this.edges.keys()]); // rescan after topology change
-            break outer;
-          }
+          if (!x) continue;
+
+          const n1 = this.splitEdge(aId, x.s1);
+          const n2 = this.splitEdge(bId, x.s2);
+          splits += 2;
+          changed = true;
+
+          // `a` and `b` were replaced by their halves; rescan the children.
+          frontier.delete(aId);
+          if (n1) for (const eid of n1.edges) frontier.add(eid);
+          if (n2) for (const eid of n2.edges) frontier.add(eid);
+
+          if (splits >= budget) return false;
+          break scan; // topology changed: restart the scan
         }
       }
-      if (!changed) break;
     }
+    return true;
   }
 
   // First intersection between two edge polylines. Returns {s1, s2} arc lengths.
@@ -154,32 +325,64 @@ export class RoadNetwork {
     return null;
   }
 
-  // Create edge between two node ids. controlsForSpline: control points between
-  // the endpoints (endpoints implied). We rebuild full control list.
-  _link(aId, bId, midControls, cls, created, upTo) {
-    if (aId === bId) return;
-    // skip if edge already exists
+  /**
+   * Creates an edge from an AUTHORITATIVE polyline, rather than re-splining a set
+   * of control points.
+   *
+   * Why: splitting or segmenting a path by re-splining a subset of its control
+   * points produces a different curve from the one the player drew (EVIDENCE
+   * E12). Slicing the already-sampled polyline keeps the geometry identical.
+   *
+   * `controls` is still populated (sparsely decimated) because the editor and the
+   * roundabout code rebuild arms from controls, and v1 saves carry them. The
+   * sampled `pts` is what the simulation and renderer use, and it is serialized
+   * so a reload reproduces the exact same shape.
+   */
+  _makeEdgeFromPts(aId, bId, cls, pts) {
     const a = this.nodes.get(aId), b = this.nodes.get(bId);
-    if (!a || !b) return;
-    if (this.edgeBetween(aId, bId)) return; // edge already exists (either direction)
-    const edge = this._makeEdge(aId, bId, cls, midControls);
-    created.edgeIds.push(edge.id);
+    if (!a || !b) return null;
+
+    // Drop consecutive duplicates so there are no zero-length runs.
+    const clean = [];
+    for (const p of pts) {
+      const last = clean[clean.length - 1];
+      if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 1e-6) clean.push([p[0], p[1]]);
+    }
+    if (clean.length < 2) return null;
+
+    const { cum, total } = polylineLengths(clean);
+    const id = this._newId('e');
+    const edge = {
+      id, a: aId, b: bId, cls,
+      controls: this._decimateForControls(clean, cum),
+      pts: clean,
+      cum,
+      total,
+      // Each sample is its own segment for a directly-built polyline.
+      segIdx: clean.map((_, i) => i),
+      driveways: [],       // building ids attached
+    };
+    this.edges.set(id, edge);
+    a.edges.add(id);
+    b.edges.add(id);
+    return edge;
   }
 
-  // Resolve the first point of a road: use snapped node or create a new one.
-  _resolveEndpoint(r, created) {
-    if (r.snap && r.snap.kind === 'node') {
-      const n = this.nodes.get(r.snap.id);
-      if (n) return n.id;
+  /**
+   * Sparse control points for an explicit polyline, for editor round-tripping.
+   * Always keeps both endpoints; interior points roughly every 30 wu.
+   */
+  _decimateForControls(pts, cum) {
+    const out = [[pts[0][0], pts[0][1]]];
+    let nextAt = 30;
+    for (let i = 1; i < pts.length - 1; i++) {
+      if (cum[i] >= nextAt) {
+        out.push([pts[i][0], pts[i][1]]);
+        nextAt = cum[i] + 30;
+      }
     }
-    if (r.snap && r.snap.kind === 'edgeSplit') {
-      const node = this.splitEdge(r.snap.edgeId, r.snap.s);
-      created.nodeIds.push(node.id);
-      return node.id;
-    }
-    const node = this._makeNode(r.x, r.y, 'plain');
-    created.nodeIds.push(node.id);
-    return node.id;
+    out.push([pts[pts.length - 1][0], pts[pts.length - 1][1]]);
+    return out;
   }
 
   _makeNode(x, y, type = 'plain') {
@@ -212,29 +415,44 @@ export class RoadNetwork {
   }
 
   // Split an existing edge at arc-length s; returns the junction node.
-  // Reuses an existing node if one already sits at the split point.
+  //
+  // Slices the edge's own polyline rather than re-splining a subset of control
+  // points, so both halves follow the original curve exactly (EVIDENCE E12).
+  // One-way and ring metadata are copied to both halves - previously they were
+  // dropped, which silently turned roundabout segments into two-way roads.
   splitEdge(edgeId, s) {
     const edge = this.edges.get(edgeId);
     if (!edge) return null;
+    if (!(s > 0) || !(s < edge.total)) return null; // must be strictly interior
+
     const p = pointAt(edge.pts, edge.cum, s);
     let node = this._snapNodeWithin(p.x, p.y, 4);
-    if (node && (node.id === edge.a || node.id === edge.b)) return node; // already at endpoint
+    if (node && (node.id === edge.a || node.id === edge.b)) return node; // already at an endpoint
     if (!node) node = this._makeNode(p.x, p.y, 'plain');
 
-    // Find the control-point index where the split happens
-    const sampleK = edge.cum.findIndex(c => c >= s);
-    const kIdx = edge.segIdx[clamp(sampleK, 0, edge.segIdx.length - 1)];
-    const ctrlA = edge.controls.slice(0, kIdx + 1).map(c => c.slice());
-    const ctrlB = edge.controls.slice(kIdx + 1).map(c => c.slice());
-    ctrlA.push([p.x, p.y]);
-    ctrlB.unshift([p.x, p.y]);
+    const ptsA = slicePolyline(edge.pts, edge.cum, 0, s);
+    const ptsB = slicePolyline(edge.pts, edge.cum, s, edge.total);
+    if (!ptsA || !ptsB) return node; // degenerate slice: keep the node, change nothing
 
-    // Rebuild as two edges
-    this.removeEdge(edgeId, true);
-    const eA = this._makeEdge(edge.a, node.id, edge.cls, ctrlA.slice(1, -1));
-    const eB = this._makeEdge(node.id, edge.b, edge.cls, ctrlB.slice(1, -1));
-    // carry over driveways to whichever side is nearer
-    for (const bId of edge.driveways) eA.driveways.push(bId); // reattached by caller if needed
+    const aId = edge.a;
+    const bId = edge.b;
+    const cls = edge.cls;
+    const meta = { oneway: !!edge.oneway, ring: !!edge.ring };
+    const carried = [...edge.driveways];
+
+    this.removeEdge(edgeId, true); // keep the endpoint nodes
+    const eA = this._makeEdgeFromPts(aId, node.id, cls, ptsA);
+    const eB = this._makeEdgeFromPts(node.id, bId, cls, ptsB);
+
+    for (const child of [eA, eB]) {
+      if (!child) continue;
+      if (meta.oneway) child.oneway = true;
+      if (meta.ring) child.ring = true;
+    }
+    // Driveway bookkeeping follows the first half; the access NODES themselves
+    // are preserved because keepNodes was true above.
+    if (eA) eA.driveways.push(...carried);
+
     this.version++;
     return node;
   }
@@ -559,10 +777,15 @@ export class RoadNetwork {
   }
 
   // Serialize / restore (topology only; cars are not saved)
+  //
+  // `pts` is serialized alongside `controls` so a reload reproduces the exact
+  // sampled geometry. Re-splining controls on load would slightly change the
+  // curve (EVIDENCE E12). v1 saves have no `pts`, so loading still falls back to
+  // resampling from controls.
   toJSON() {
     return {
       nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
-      edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, controls: e.controls, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
+      edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
     };
   }
 
@@ -580,7 +803,17 @@ export class RoadNetwork {
       net.edges.set(edge.id, edge);
       net.nodes.get(e.a)?.edges.add(e.id);
       net.nodes.get(e.b)?.edges.add(e.id);
-      net.resampleEdge(edge);
+      if (Array.isArray(e.pts) && e.pts.length >= 2) {
+        // Saved sampled geometry is authoritative: use it verbatim.
+        const { cum, total } = polylineLengths(e.pts);
+        edge.pts = e.pts.map(p => [p[0], p[1]]);
+        edge.cum = cum;
+        edge.total = total;
+        edge.segIdx = edge.pts.map((_, i) => i);
+      } else {
+        // v1 save: no sampled geometry, so rebuild it from the control points.
+        net.resampleEdge(edge);
+      }
     }
     // upgrade legacy point roundabouts into real rings
     for (const n of [...net.nodes.values()]) {

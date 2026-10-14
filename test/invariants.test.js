@@ -221,22 +221,23 @@ test('legacy v1 fixture still routes a house to a shop', () => {
   assert.ok(path.time > 0, `route has positive travel time, got ${path.time}`);
 });
 
-// -------------------------------------------- tracked gap (see EVIDENCE E05) ---
+// ------------------------------------------------ gap closed by S01.5 ---
 
-test('eightCrossingsWorld currently resolves fewer than 8 junctions (tracked gap)', () => {
+test('eightCrossingsWorld resolves all 8 junctions', () => {
   const { net, anchors } = eightCrossingsWorld();
   assertGraphConsistent(net, 'eightCrossingsWorld');
   assert.equal(anchors.verticalXs.length, 8, 'fixture declares eight vertical roads');
 
-  // CHARACTERIZATION, NOT ACCEPTANCE.
-  // Target is 8 junctions (anchors.expectedJunctionCount). The current crossing
-  // resolver stops after a bounded number of splits, so only 6 resolve. This
-  // assertion pins today's behaviour so the fix in S01.5 shows up as a visible
-  // diff: S01.5 must change `6` to `anchors.expectedJunctionCount` (8).
-  // Tracked in docs/roadmap/status.json under trackedGaps.
-  assert.equal(anchors.junctions.length, 6,
-    `crossing resolution produced ${anchors.junctions.length} junctions; `
-    + 'if this changed, update the S01.5 expectation instead of the target');
+  // S00.3 pinned today's value as a CHARACTERIZATION test because the crossing
+  // resolver stopped after six iterations. S01.5 replaced that bounded loop with
+  // a frontier walk that continues until no crossing remains, so this now
+  // asserts the TARGET. GAP-E05-crossings is closed.
+  assert.equal(anchors.junctions.length, anchors.expectedJunctionCount,
+    `expected ${anchors.expectedJunctionCount} junctions, got ${anchors.junctions.length}`);
+
+  const xs = anchors.junctions.map(n => Math.round(n.x)).sort((a, b) => a - b);
+  assert.deepEqual(xs, [0, 100, 200, 300, 400, 500, 600, 700],
+    `junctions must sit at each crossing, got ${xs.join(',')}`);
 });
 
 // ------------------------------------------------------ level-up threshold ---
