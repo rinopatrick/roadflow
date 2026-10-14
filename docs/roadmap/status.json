@@ -890,6 +890,12 @@
           "exitCode": 0,
           "result": "Inspected ui-layer-traffic-desktop-1440x900-seed1.png and ui-layer-access-desktop-1440x900-seed1.png plus the full tool-state sweep at both viewports. Traffic: a teal band on the congested edge with a '1' vehicle-count chip, and a legend reading free flowing 1 / busy 0 / queueing 0 / jammed 0 - matching the single edge the overlay drew. Access: both buildings ringed in the accent colour with a legend reading 'can reach the road network 2 / no route to anything 0'.",
           "artifact": "artifacts/after-s02.2b"
+        },
+        {
+          "command": "node --test --test-name-pattern='sound control showing' test/browser/ui.js",
+          "exitCode": 1,
+          "result": "REAL BUG FOUND AND FIXED after the task was first reported. The test mutes, saves, unmutes, then loads the save. Before the fix it failed with: \"the sound control must show the loaded state, not the state it had before the load - 'true' !== 'false'\". The load DID apply the saved preference (world.settings.audio was false, asserted separately) but the button still reported aria-pressed=true and 'Sound on'. Cause: replaceWorld called setAudioEnabled() on the audio module directly, while the button was only ever refreshed by initMenu's own click handler, so a load or import left the control and the world disagreeing. Speed did not have this problem because setSpeed already routed through menu.applySpeed. Fixed by adding a single applyAudio(enabled) used by both the sound click handler and replaceWorld, so the module and the control are updated together. Passes after the fix.",
+          "artifact": null
         }
       ],
       "notes": [
@@ -901,7 +907,8 @@
         "Sound: the control starts on, shows its state through aria-pressed and a sound/mute icon, and writes through to world.settings.audio so a save carries the preference. The boot-time tool selection is gated behind a uiReady flag so creating an AudioContext is not attempted before any user gesture; a browser test counts AudioContext constructions to prove a muted game opens none.",
         "Export downloads a real file through a Blob URL rather than writing silently to storage. Import is failure-isolated: the browser test asserts the full world state is byte-identical after both a malformed file and a structurally-valid-but-semantically-wrong snapshot, and that the player is told the city was not touched.",
         "Deferred to S02.3: the traffic overlay's own visual refinement (junction mouth trim, junction fill polygons) is rendering work, not layer work. Deliberately NOT added: a Noise layer (no data, S06.3), and any Pollution layer (see above).",
-        "STATUS: implementation and every check in the task's Verify line pass, including the full browser interaction matrix the task asked for. Held at in_progress for the operator review checkpoint, consistent with S02.1 and S02.2a."
+        "STATUS: implementation and every check in the task's Verify line pass, including the full browser interaction matrix the task asked for. Held at in_progress for the operator review checkpoint, consistent with S02.1 and S02.2a.",
+        "POST-REPORT FIX: the sound control diverged from the loaded world state (see the final evidence entry). This is the same class of defect S02.2 item 2 exists to prevent - one value owned by two places. Also added 5 unit tests in test/layers.test.js proving the upper traffic bands are reachable from real simulation rather than only from hand-written values: a standstill reaches the top band, every declared band is reachable across 0..1, the jammed threshold is inside what the sim produces, a jammed edge carries a vehicle count, and a clearing jam passes back down through every band. Verified with a real TrafficSim driven to a standstill, not by writing _congestion by hand."
       ]
     },
     {

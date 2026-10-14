@@ -109,8 +109,12 @@ function replaceWorld(world) {
   // references stay valid instead of being replaced.
   if (world.camera) Object.assign(renderer.cam, world.camera);
   if (world.settings) {
+    // Both settings are applied through the same path the controls use, so the
+    // visible state cannot disagree with the world after a load or import.
+    // `applyAudio` used to be skipped here: the audio module was updated but the
+    // button was not, so a loaded muted save showed "Sound on".
     setSpeed(world.settings.speed ?? 1);
-    setAudioEnabled(world.settings.audio !== false);
+    applyAudio(world.settings.audio !== false);
   }
 
   bindWorldCallbacks();
@@ -517,7 +521,7 @@ const menu = initMenu({
   onSpeed: setSpeed,
   isSoundEnabled: () => audioEnabled(),
   onSound: (enabled) => {
-    setAudioEnabled(enabled);
+    applyAudio(enabled);
     if (enabled) sfx.click();
   },
   onSave: () => {
@@ -590,6 +594,18 @@ const menu = initMenu({
 });
 
 document.getElementById('inspectClose').addEventListener('click', closeInspect);
+
+/**
+ * Applies the sound setting to the audio module AND the control that shows it.
+ *
+ * Declared as a function so `replaceWorld` — which appears earlier in this file
+ * — can call it: hoisting makes the order irrelevant, and `menu` is initialised
+ * before boot runs.
+ */
+function applyAudio(enabled) {
+  setAudioEnabled(enabled);
+  menu.applySound(enabled);
+}
 
 // ---------- layers ----------
 const layersUI = initLayers();
