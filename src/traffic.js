@@ -20,10 +20,27 @@ const MIN_GAP = 2.2;
 
 let carSeq = 1;
 
+/**
+ * Current value of the vehicle ID counter, for persistence.
+ * `carSeq` is module-level, so without this a reload would reissue IDs that an
+ * existing save already contains.
+ */
+export function getCarIdCounter() { return carSeq; }
+
+/**
+ * Restores the vehicle ID counter after a load.
+ * Only ever moves it forward, so a stale snapshot cannot cause reissued IDs.
+ */
+export function setCarIdCounter(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError(`car id counter must be a positive integer, got ${value}`);
+  }
+  carSeq = Math.max(carSeq, value);
+}
+
 export class Car {
   constructor(route, colorIdx) {
-    this.id = carSeq++;
-    this.route = route;             // {steps:[{edgeId,from,to,dir}], nodes}
+    this.id = carSeq++;    this.route = route;             // {steps:[{edgeId,from,to,dir}], nodes}
     this.step = 0;                  // index into route.steps
     this.s = 0;                     // arc pos along current edge (in travel direction)
     this.speed = 0;

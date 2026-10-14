@@ -240,6 +240,60 @@ A player drawing a bypass between two already-connected junctions would see no r
 
 **Mutation-verified:** reverting to endpoints-only segmentation fails 7 tests.
 
+### E13 — Pending returns and active trips were not persisted (FIXED in S01.7)
+
+The v1 save stored buildings, XP, level, batch, totalTrips, network topology, camera and `simTime` — and nothing else. It omitted `_pendingReturns`, `cancelledReturns`, `cancellationReasons`, every active vehicle, both RNG streams, the simulation stats, the vehicle ID counter and the ID source counter.
+
+Consequences:
+
+- saving during the dwell silently dropped the queued return trip
+- every vehicle vanished on reload, so trips in progress were lost
+- the RNG streams restarted from their seeds, so a restored world diverged from an uninterrupted one
+- the ID counters reset, so new construction could **reissue identifiers that the save already contained**
+- there was no schema version, so a payload could not be checked or migrated
+
+**Fix (S01.7):** `src/worldSnapshot.js` owns `serializeWorld` / `validateSnapshot` / `hydrateWorld` at schema **v2**. The snapshot carries traffic state (each vehicle's route, step, arc position, speed, purpose and trip identity), clocks, stats, RNG states, the ID counters, camera and settings. Callbacks are **not** serialized: `hydrateWorld` rebuilds them, because a closure cannot be expressed as data.
+
+The strongest guarantee is **round-trip equality**: a world saved mid-flight and restored, then given the same 600 future ticks, produces a normalized state identical to the world that was never interrupted. Mutation (dropping `cars`) fails 5 tests; dropping `pendingReturns` fails 2.
+
+### E18 — A failed load destroyed the current city and reported success (FIXED in S01.7)
+
+The v1 storage layer had no error handling around reads and returned `null` for every failure. Every caller treated `null` as "start a new city":
+
+```js
+function loadFromSave() {
+  const data = loadGame();
+  if (!data) { newGame(); return; }   // destroys the city in progress
+}
+document.getElementById('btnLoad').addEventListener('click', () => {
+  if (!hasSave()) { toast('No save found.', 'warn'); return; }
+  loadFromSave();
+  toast('City loaded.');              // unconditional success
+});
+```
+
+So a corrupt or truncated payload replaced the player's city with a blank map **and then showed a "City loaded." success toast**. A disabled or full storage threw from inside `hasSave`, which was not wrapped either.
+
+**Fix (S01.7):**
+
+- `loadGame` returns `{ok:true, world, warnings}` or `{ok:false, error, empty?}`. The `empty` flag distinguishes "nothing saved" from "saved but damaged", so the UI no longer says *"No save found."* for a corrupt file.
+- `loadFromSave` leaves the **current world untouched** on failure and surfaces the reason. It never falls back to a new city.
+- The menu handler only reports success when the load actually succeeded, and mentions Recover when a backup exists.
+- Every storage read and write is wrapped, including `hasSave`, which now returns `false` rather than throwing.
+- A **backup slot** receives the previous manual save before it is overwritten, and a separate **autosave slot** means an autosave can never clobber a manual save. The Recover button is only shown when a *valid* backup exists.
+
+Verified by mutation: restoring the unconditional success toast fails the browser test with the v1 message visible in the failure output (`save is not usable: ... is not valid JSON | City loaded.`).
+
+### E19 — Corrupt input could not be told apart from an empty slot (FIXED in S01.7)
+
+The single `null` return conflated "no save", "storage disabled", "quota exceeded" and "corrupt payload". Callers could not choose the right response, and no validation existed at all: duplicate node IDs, edges referencing missing nodes, `NaN` coordinates, unknown enum values, oversized payloads and future schema versions were all accepted and would produce a half-built world.
+
+**Fix (S01.7):** `validateSnapshot` is pure and returns `{ok, errors}` or `{ok:true, data, warnings}`. It enforces: version presence and range, node/edge/building ID uniqueness, endpoint references, finite and in-range coordinates, geometry presence, count caps (10 MiB, 20k nodes, 30k edges, 10k buildings, 5k vehicles), camera zoom range, and finite vehicle state.
+
+Recoverable problems **warn** rather than fail: a building that lost its access node, or a vehicle whose route references a deleted road, is dropped or flagged so the rest of the city still loads. Unrecoverable problems refuse the whole payload.
+
+Mutation-verified: removing the future-version guard fails 1 test; removing duplicate-ID detection fails 1 test.
+
 ### E06 — Simulation randomness made the world non-reproducible (fixed in S01.1)
 
 Seeded terrain gave the impression of a deterministic game, but the simulation used `Math.random` directly: `Car.maxSpeed = 12 + Math.random() * 4` (assigned and never read), spawn colour, and lane choice. Graph IDs came from `uid()` (also `Math.random`), so every load produced different IDs. A seed therefore fixed geography only.
@@ -286,11 +340,61 @@ Fix: `Economy._newBuildingId()` reads `net.ids` **live** rather than caching it 
 
 Fix: `rot` is drawn from a **separate cosmetic RNG stream** (`Economy.cosmeticRng = makeRng(seed ^ 0x9e3779b9)`), as CONTRACTS.md §2 requires. Drawing it from the simulation stream would shift every later `tripTimer` draw and silently retune demand pacing; that was observed during this fix (soak moved from 10 to 12 trips) before the stream was split. After splitting, the 90-second soak is byte-identical to the pre-change baseline (10 trips, XP 31.9201%, avg 35 s), proving the simulation stream is untouched.
 
-### E13 — Pending returns are not persisted (open, tracked)
+### E13 — Pending returns and active trips were not persisted (FIXED in S01.7)
 
-`Economy.toJSON()` serializes buildings, xp, level, batch and totalTrips, but not `_pendingReturns`, `cancelledReturns` or `cancellationReasons`. `fromJSON` builds a fresh instance, so the queue starts empty. Saving during the dwell therefore drops the queued return trip — no crash and no corruption, the trip is simply lost.
+The v1 save stored buildings, XP, level, batch, totalTrips, network topology, camera and `simTime` — and nothing else. It omitted `_pendingReturns`, `cancelledReturns`, `cancellationReasons`, every active vehicle, both RNG streams, the simulation stats, the vehicle ID counter and the ID source counter.
 
-Owned by **S01.7**, which introduces the full snapshot including pending returns, clocks and RNG state. The plan explicitly defers this so S01.7 does not have to undo a partial implementation. Two characterization tests in `test/returnDispatch.test.js` pin today's behaviour, and `GAP-pending-returns-not-saved` tracks it in the ledger.
+Consequences:
+
+- saving during the dwell silently dropped the queued return trip
+- every vehicle vanished on reload, so trips in progress were lost
+- the RNG streams restarted from their seeds, so a restored world diverged from an uninterrupted one
+- the ID counters reset, so new construction could **reissue identifiers that the save already contained**
+- there was no schema version, so a payload could not be checked or migrated
+
+**Fix (S01.7):** `src/worldSnapshot.js` owns `serializeWorld` / `validateSnapshot` / `hydrateWorld` at schema **v2**. The snapshot carries traffic state (each vehicle's route, step, arc position, speed, purpose and trip identity), clocks, stats, RNG states, the ID counters, camera and settings. Callbacks are **not** serialized: `hydrateWorld` rebuilds them, because a closure cannot be expressed as data.
+
+The strongest guarantee is **round-trip equality**: a world saved mid-flight and restored, then given the same 600 future ticks, produces a normalized state identical to the world that was never interrupted. Mutation (dropping `cars`) fails 5 tests; dropping `pendingReturns` fails 2.
+
+### E18 — A failed load destroyed the current city and reported success (FIXED in S01.7)
+
+The v1 storage layer had no error handling around reads and returned `null` for every failure. Every caller treated `null` as "start a new city":
+
+```js
+function loadFromSave() {
+  const data = loadGame();
+  if (!data) { newGame(); return; }   // destroys the city in progress
+}
+document.getElementById('btnLoad').addEventListener('click', () => {
+  if (!hasSave()) { toast('No save found.', 'warn'); return; }
+  loadFromSave();
+  toast('City loaded.');              // unconditional success
+});
+```
+
+So a corrupt or truncated payload replaced the player's city with a blank map **and then showed a "City loaded." success toast**. A disabled or full storage threw from inside `hasSave`, which was not wrapped either.
+
+**Fix (S01.7):**
+
+- `loadGame` returns `{ok:true, world, warnings}` or `{ok:false, error, empty?}`. The `empty` flag distinguishes "nothing saved" from "saved but damaged", so the UI no longer says *"No save found."* for a corrupt file.
+- `loadFromSave` leaves the **current world untouched** on failure and surfaces the reason. It never falls back to a new city.
+- The menu handler only reports success when the load actually succeeded, and mentions Recover when a backup exists.
+- Every storage read and write is wrapped, including `hasSave`, which now returns `false` rather than throwing.
+- A **backup slot** receives the previous manual save before it is overwritten, and a separate **autosave slot** means an autosave can never clobber a manual save. The Recover button is only shown when a *valid* backup exists.
+
+Verified by mutation: restoring the unconditional success toast fails the browser test with the v1 message visible in the failure output (`save is not usable: ... is not valid JSON | City loaded.`).
+
+### E19 — Corrupt input could not be told apart from an empty slot (FIXED in S01.7)
+
+The single `null` return conflated "no save", "storage disabled", "quota exceeded" and "corrupt payload". Callers could not choose the right response, and no validation existed at all: duplicate node IDs, edges referencing missing nodes, `NaN` coordinates, unknown enum values, oversized payloads and future schema versions were all accepted and would produce a half-built world.
+
+**Fix (S01.7):** `validateSnapshot` is pure and returns `{ok, errors}` or `{ok:true, data, warnings}`. It enforces: version presence and range, node/edge/building ID uniqueness, endpoint references, finite and in-range coordinates, geometry presence, count caps (10 MiB, 20k nodes, 30k edges, 10k buildings, 5k vehicles), camera zoom range, and finite vehicle state.
+
+Recoverable problems **warn** rather than fail: a building that lost its access node, or a vehicle whose route references a deleted road, is dropped or flagged so the rest of the city still loads. Unrecoverable problems refuse the whole payload.
+
+Mutation-verified: removing the future-version guard fails 1 test; removing duplicate-ID detection fails 1 test.
+
+### E06 — Simulation randomness made the world non-reproducible (fixed in S01.1)
 
 ## Source findings still requiring regression reproduction
 

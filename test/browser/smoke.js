@@ -110,7 +110,7 @@ test('rejected placement does not consume stock', async () => {
   assert.equal(after.pop, before.pop, 'rejected placement must not change population');
 });
 
-test('save writes a parseable v1 snapshot', async () => {
+test('save writes a parseable v2 snapshot with full world state', async () => {
   const { page } = game;
 
   await page.click('#btnSave');
@@ -121,7 +121,15 @@ test('save writes a parseable v1 snapshot', async () => {
     if (!raw) return null;
     try {
       const d = JSON.parse(raw);
-      return { v: d.v, edges: d.net?.edges?.length ?? 0, buildings: d.eco?.buildings?.length ?? 0 };
+      return {
+        v: d.v,
+        edges: d.net?.edges?.length ?? 0,
+        buildings: d.eco?.buildings?.length ?? 0,
+        hasTrafficState: !!d.traffic,
+        hasIdCounter: Number.isInteger(d.ids?.next),
+        hasSettings: !!d.settings,
+        mapSeed: d.map?.seed,
+      };
     } catch (e) {
       return { parseError: String(e) };
     }
@@ -129,11 +137,171 @@ test('save writes a parseable v1 snapshot', async () => {
 
   assert.ok(save, 'save key "roadflow.save" must exist after clicking Save');
   assert.ok(!save.parseError, `save payload must parse: ${save.parseError}`);
-  assert.equal(save.v, 1, 'save schema version must be 1');
+  assert.equal(save.v, 2, 'save schema version must be 2');
   assert.ok(save.edges > 0, `saved network must contain edges, got ${save.edges}`);
   assert.ok(save.buildings > 0, `saved economy must contain buildings, got ${save.buildings}`);
+  // The v1 payload omitted all of these, which is what S01.7 added.
+  assert.equal(save.hasTrafficState, true, 'v2 must store traffic state');
+  assert.equal(save.hasIdCounter, true, 'v2 must store the ID counter');
+  assert.equal(save.hasSettings, true, 'v2 must store settings');
+  assert.ok(Number.isFinite(save.mapSeed), 'v2 must record the map seed');
 
   await page.screenshot({ path: `${shots}/03-saved.png` });
+});
+
+test('reloading restores the same city rather than a fresh one', async () => {
+  const { page } = game;
+
+  const read = () => page.evaluate(() => {
+    const s = window.__rf.state;
+    return {
+      nodes: s.net.nodes.size,
+      edges: s.net.edges.size,
+      buildings: s.eco.buildings.size,
+      xp: s.eco.xp,
+      seed: s.terrain.seed,
+    };
+  });
+
+  const before = await read();
+  assert.ok(before.edges > 0 && before.buildings > 0, 'there is a city to save');
+
+  await page.click('#btnSave');
+  await page.waitForTimeout(300);
+  await page.click('#btnLoad');
+  await page.waitForTimeout(600);
+
+  const after = await read();
+  assert.equal(after.seed, before.seed, 'same map seed after reload');
+  assert.equal(after.nodes, before.nodes, 'same node count after reload');
+  assert.equal(after.edges, before.edges, 'same edge count after reload');
+  assert.equal(after.buildings, before.buildings, 'same buildings after reload');
+  assert.equal(after.xp, before.xp, 'same XP after reload');
+});
+
+test('an active trip survives a save and reload', async () => {
+  const { page } = game;
+
+  // Freeze time first: otherwise the car keeps moving during the save/load
+  // round trip and the comparison races the simulation clock.
+  await page.click('[data-speed="0"]');
+
+  // The smoke fixture places a house but may not have a shop, so ensure both
+  // exist before spawning a trip.
+  const placed = await page.evaluate(() => {
+    const s = window.__rf.state;
+    s.eco.batch.shop = 5;
+    if (![...s.eco.buildings.values()].some(b => b.type === 'shop')) {
+      s.eco.place('shop', 300, 120);
+    }
+    const homes = [...s.eco.buildings.values()].filter(b => b.type === 'house');
+    const shops = [...s.eco.buildings.values()].filter(b => b.type === 'shop');
+    if (!homes.length || !shops.length) return { error: 'fixture has no home/shop pair' };
+    const car = s.traffic.spawn(homes[0].drivewayNode, shops[0].drivewayNode);
+    if (!car) return { error: 'spawn refused' };
+    for (let i = 0; i < 30; i++) s.traffic.update(1 / 60);
+    return { id: car.id, step: car.step, s: car.s };
+  });
+  assert.ok(!placed.error, `fixture must produce a vehicle mid-trip: ${placed.error}`);
+
+  await page.click('#btnSave');
+  await page.waitForTimeout(300);
+  await page.click('#btnLoad');
+  await page.waitForTimeout(600);
+
+  const restored = await page.evaluate(() => {
+    const cars = [...window.__rf.state.traffic.cars.values()];
+    return cars.length
+      ? { count: cars.length, id: cars[0].id, step: cars[0].step, s: cars[0].s }
+      : { count: 0 };
+  });
+
+  assert.ok(restored.count > 0, 'the active vehicle survived the reload');
+  assert.equal(restored.id, placed.id, 'same vehicle id');
+  assert.equal(restored.step, placed.step, 'same route step');
+  assert.ok(Math.abs(restored.s - placed.s) < 1e-6,
+    `same arc position (${restored.s} vs ${placed.s})`);
+});
+
+test('a corrupt import leaves the current city untouched', async () => {
+  const { page } = game;
+
+  const read = () => page.evaluate(() => {
+    const s = window.__rf.state;
+    return { nodes: s.net.nodes.size, edges: s.net.edges.size, buildings: s.eco.buildings.size };
+  });
+
+  const before = await read();
+
+  const result = await page.evaluate(() => {
+    // Exercise the import path directly; a file input arrives in S02.2.
+    const res = window.__rf.save.importGame('{"v":2,"net":{"nodes":[]}}');
+    return { ok: res.ok, error: res.error, hasWorld: !!res.world };
+  });
+
+  assert.equal(result.ok, false, 'a malformed import must be refused');
+  assert.equal(result.hasWorld, false, 'no world is produced from a bad import');
+  assert.ok(result.error, 'the failure explains itself');
+  assert.deepEqual(await read(), before, 'the current city is unchanged by a failed import');
+});
+
+test('a valid export round-trips through the import path', async () => {
+  const { page } = game;
+  const result = await page.evaluate(() => {
+    const text = window.__rf.save.exportGame(window.__rf.world);
+    const res = window.__rf.save.importGame(text);
+    if (!res.ok) return { ok: false, error: res.error };
+    return {
+      ok: true,
+      edges: res.world.net.edges.size,
+      buildings: res.world.eco.buildings.size,
+    };
+  });
+  assert.equal(result.ok, true, `export/import failed: ${result.error}`);
+  assert.ok(result.edges > 0, 'the imported city has roads');
+  assert.ok(result.buildings > 0, 'the imported city has buildings');
+});
+
+test('a corrupt stored save does not silently replace the city', async () => {
+  const { page } = game;
+
+  const before = await page.evaluate(() => window.__rf.state.net.edges.size);
+  assert.ok(before > 0, 'there is a city in progress');
+
+  // Corrupt the stored slot, then try to load through the UI.
+  await page.evaluate(() => localStorage.setItem('roadflow.save', '{not json'));
+  const reported = await page.evaluate(() => {
+    const res = window.__rf.save.loadGame();
+    return { ok: res.ok, error: res.error, empty: res.empty === true };
+  });
+
+  assert.equal(reported.ok, false, 'a corrupt save must not load');
+  assert.equal(reported.empty, false, 'it is corrupt, not empty');
+  assert.ok(reported.error, 'the reason is available for the player');
+
+  const after = await page.evaluate(() => window.__rf.state.net.edges.size);
+  assert.equal(after, before, 'the city in progress is untouched');
+});
+
+test('a failed load does not report success', async () => {
+  const { page } = game;
+
+  await page.evaluate(() => localStorage.setItem('roadflow.save', 'garbage'));
+  // Clear toasts left over from earlier tests so only NEW ones are inspected.
+  await page.evaluate(() => { document.getElementById('toasts').innerHTML = ''; });
+  await page.click('#btnLoad');
+  await page.waitForTimeout(400);
+
+  // The v1 handler always toasted "City loaded." even when the load failed.
+  const toasts = await page.$$eval('#toasts .toast', els => els.map(e => e.textContent.trim()));
+  assert.ok(toasts.length > 0, 'the failure is reported to the player at all');
+  assert.equal(toasts.some(t => /^City loaded\.?$/.test(t)), false,
+    `a failed load must not claim success; toasts were: ${toasts.join(' | ')}`);
+  // A damaged save must not be reported as missing either.
+  assert.equal(toasts.some(t => /no save found/i.test(t)), false,
+    `a damaged save must not be reported as missing; toasts were: ${toasts.join(' | ')}`);
+  assert.ok(toasts.some(t => /not usable|damaged|corrupt/i.test(t)),
+    `the message should describe the damage; toasts were: ${toasts.join(' | ')}`);
 });
 
 test('simulation clock honours pause and speed multipliers', async () => {
@@ -320,6 +488,7 @@ test('bulldozing a building via its driveway refunds the correct type', async ()
     const node = s.net.nodes.get(shop.drivewayNode);
     return {
       shopId: shop.id,
+      shopCount: [...s.eco.buildings.values()].filter(b => b.type === 'shop').length,
       batch: { ...s.eco.batch },
       nodeWorld: node ? { x: node.x, y: node.y } : null,
     };
@@ -345,14 +514,15 @@ test('bulldozing a building via its driveway refunds the correct type', async ()
     const s = window.__rf.state;
     return {
       batch: { ...s.eco.batch },
+      // Scope the check to THIS shop: earlier tests may have placed others.
       shopGone: !s.eco.buildings.has(shopId),
-      buildings: [...s.eco.buildings.values()].map(b => b.type),
+      shopCount: [...s.eco.buildings.values()].filter(b => b.type === 'shop').length,
     };
   }, afterPlace.shopId);
 
-  assert.equal(afterBulldoze.shopGone, true, 'the shop was demolished');
-  assert.equal(afterBulldoze.buildings.includes('shop'), false,
-    'no shop remains in the economy');
+  assert.equal(afterBulldoze.shopGone, true, 'the specific shop was demolished');
+  assert.equal(afterBulldoze.shopCount, afterPlace.shopCount - 1,
+    'exactly one shop disappeared');
   assert.equal(afterBulldoze.batch.shop, 3,
     `demolishing a shop must refund a SHOP, got batch.shop=${afterBulldoze.batch.shop}`);
   assert.equal(afterBulldoze.batch.house, 5,
