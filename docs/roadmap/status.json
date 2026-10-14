@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.2",
+  "nextTask": "S02.2b",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -792,7 +792,7 @@
     },
     {
       "id": "S02.2a",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.1"
       ],
@@ -827,6 +827,11 @@
           "command": "RF_RUN_ID=after-s02.2a node --test test/browser/ui.js (capture pass)",
           "exitCode": 0,
           "result": "Captures at desktop 1440x900 and compact 1024x768, clock frozen at speed 0: full page, each of the five categories open, every tool active/hover/focus, and the menu popover. Inspected: the top band is one grouped surface with the stats inline and the speed group reading Pause / 1x / 3x / 8x; the dock is two rows with the active category tinted and its tools on the contextual row; context help reads 'Road - click to set points, Enter to finish (1)'; the menu popover drops from the top right; nothing is clipped at 1024x768."
+        },
+        {
+          "command": "operator approval of the S02.2a layout, speed labels and menu",
+          "exitCode": 0,
+          "result": "APPROVED. The operator reviewed the desktop and compact captures and directed work to continue, accepting the grouped 56px top band, the two-row categorical dock, the 296px inspector, the Pause / 1x / 3x / 8x speed labels and the menu popover. The taller dock was accepted, which is what allowed S02.2b to add the layer surface above the dock. S02.2b is now eligible."
         }
       ],
       "notes": [
@@ -837,19 +842,66 @@
         "Panels are exclusive: ui.set({openPanel}) is the only way to open the menu or the inspector, so showPanel closes the other rather than leaving two booleans to drift. The menu also closes on outside pointerdown and on Escape, and Escape now cancels the innermost thing (dialog, then panel, then road draft, then inspector) instead of help-then-tool.",
         "New map confirms only when dirty, which is set by building a road, roundabout, traffic light or building, and by bulldozing. Save clears it. Autosave deliberately does NOT: the autosave slot is a safety net, not the player's save, so discarding the city still deserves a prompt.",
         "Deliberately deferred to S02.2b: the Traffic/Access/Pollution layer toggles with legends, the audio enable control, the Import/Export menu flows, depletion discoverability (reason plus progression link), and the full interaction matrix. The controller already carries `overlay` for them, and src/render.js is untouched, so no renderer change is needed until then.",
-        "STATUS: implementation and every check in the task's Verify line pass. Held at in_progress because the operator asked for a review checkpoint at the end of each session, and the layout, the speed labels and the new menu are exactly what DESIGN section 7 wants a human to look at. Flip to done on approval."
+        "STATUS: implementation and every check in the task's Verify line pass. Held at in_progress because the operator asked for a review checkpoint at the end of each session, and the layout, the speed labels and the new menu are exactly what DESIGN section 7 wants a human to look at. Flip to done on approval.",
+        "CLOSED. Re-verified: npm test 265/265, npm run test:browser 38/38, soak 10 trips, 10/10 mutations caught."
       ]
     },
     {
-      "id": "S02.2",
-      "status": "pending",
+      "id": "S02.2b",
+      "status": "in_progress",
       "dependsOn": [
         "S02.2a"
       ],
       "file": "stages/02-experience.md",
-      "evidence": [],
+      "evidence": [
+        {
+          "command": "node --test test/layers.test.js (red before the nextOverlay fix)",
+          "exitCode": 1,
+          "result": "RED on the first run: 14 pass, 1 fail - 'an unknown overlay id is refused rather than stored'. This was a real semantics bug, not a harness fault: `if (id != null && !LAYER_IDS.includes(id)) return current;` let `undefined` through, so a misspelled id was stored as the active overlay. Fixed by treating only an explicit null as 'no overlay'. 15/15 afterwards."
+        },
+        {
+          "command": "node --test test/browser/ui.js (red before the S02.2b implementation)",
+          "exitCode": 1,
+          "result": "RED: 3 new tests failed as designed - 'access: must start off', 'no legend until a layer is on', and a timeout waiting for the inspector to open. Two were defects in the new tests and were fixed in the tests, not the product: clicking #layerbtns in the chrome-passthrough case legitimately toggles a layer and leaked state into the layer cases (the case now clicks the layers HEADING, which really is chrome, and asserts the overlay is untouched), and the compact-inspector fixture tried to put a traffic light on a dead-end node, where a light needs two road connections (the fixture now targets a bend)."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 280, pass 280, fail 0. Was 265 before this task; +15 from test/layers.test.js. No existing test weakened or removed. The new module is pure, so the overlay model is testable without a browser."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 46, pass 46, fail 0. Was 38 before; +8 new cases: layer declarations backed by simulated data, one-layer-at-a-time with its labelled legend, the traffic legend counting the same edges the overlay draws, real access reachability (lone building unreachable, road-connected pair reachable), sound toggle with an AudioContext counter proving no audio before a user gesture, export download plus bad-import isolation, the depletion reason and progression link, and compact inspector scrolling."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, identical to the S02.2a run. The layer work did not disturb normal traffic."
+        },
+        {
+          "command": "node scripts/mutate-s022b.mjs (12 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "12 of 12 caught, but only after replacing one ineffective mutation. A nextOverlay stores an unknown id -> 1 failure. B access layer relabelled pollution -> 7. C renderer regains a showPollution flag -> 1. D fabricated pollution overlay restored -> 1. E traffic overlay tints empty edges -> 3. F every building reported reachable -> 2. G traffic legend reports a fabricated count -> 1. H sound toggle does not reach the audio setting -> 1. I failed import replaces the city anyway -> 1. J depletion message drops the progression link -> 1. L every legend block shown at once -> 1. The first K (remove the static `hidden` attribute from #layerlegend in index.html) was INEFFECTIVE - the 'unreachable' category, like S01.7's mutation: initLayers' sync() sets legend.hidden on boot, so the attribute is overwritten before anything can observe it and the mutated line never ran. Replaced with a mutation of the real logic (legend.hidden = false in sync), which fails as required.",
+          "artifact": null
+        },
+        {
+          "command": "capture pass (RF_RUN_ID=after-s02.2b)",
+          "exitCode": 0,
+          "result": "Inspected ui-layer-traffic-desktop-1440x900-seed1.png and ui-layer-access-desktop-1440x900-seed1.png plus the full tool-state sweep at both viewports. Traffic: a teal band on the congested edge with a '1' vehicle-count chip, and a legend reading free flowing 1 / busy 0 / queueing 0 / jammed 0 - matching the single edge the overlay drew. Access: both buildings ringed in the accent colour with a legend reading 'can reach the road network 2 / no route to anything 0'.",
+          "artifact": "artifacts/after-s02.2b"
+        }
+      ],
       "notes": [
-        "Split by AMEND-S02.2-split. This task is now the REMAINING half and must not start until S02.2a is done: Traffic/Access/Pollution layer toggles with labelled legends wired to real renderer flags (Access = reachable/unreachable from the existing graph; Noise only in S06.3), the audio enable control, the Import/Export/Recovery menu flows, depletion discoverability with a reason and a progression link, and the full browser interaction matrix (every category, every tool, overlays, mute, valid and invalid import, compact inspector scroll, no UI input reaching the canvas). The controller field `overlay` already exists and is null; src/render.js has not been modified yet."
+        "Created src/layers.js (pure overlay model), src/ui/layers.js (labelled toggles plus legend), test/layers.test.js (15 unit tests), scripts/mutate-s022b.mjs. Modified index.html (layer surface, sound button, Export/Import menu items, hidden file input, help text), src/ui.css (layer surface and legend styles plus swatch tones), src/ui/menu.js (sound toggle and import/export wiring), src/ui/toolbar.js (describeTool injection so the dock can explain an inventory shortfall without importing the economy), src/main.js (layer wiring, legend refresh, sound handler, export download, import with failure isolation, depletion messaging), src/icons.js (layers, traffic, access, sound, mute, exportFile, importFile), src/render.js, test/browser/ui.js (+8 cases), docs/roadmap/TESTING.md.",
+        "REMOVED INVENTED DATA. src/render.js contained `_drawPollution`, which painted a 620wu radial gradient around every factory with no simulated pollution field anywhere in the codebase - and the `showPollution` flag was never set by any caller. Wiring the task's requested Pollution toggle to it would have shown a player fabricated values, which DESIGN section 5 forbids ('show only fields actually computed by core simulation... not mock values') and which this task's own 'Do not expose noise before implementation' restates. Per operator decision the method and both renderer overlay flags were DELETED, and the layer set is now Traffic and Access only, each declaring the simulated field it reads. test/layers.test.js asserts no layer can claim a pollution/noise source, and the browser suite asserts `_drawPollution` and `showPollution` no longer exist on the renderer. S06.3 owns environment/noise and will add its layer with its own data.",
+        "Overlay state moved from renderer booleans into the UI controller. `showCongestion` and `showPollution` were fields on the Renderer that nothing set; the active overlay is now `ui.overlay`, arrives with each draw call as `state.overlay`, and is toggled only through nextOverlay, so the control and the drawing cannot disagree.",
+        "DESIGN section 1 required the traffic overlay to be 'colour + line thickness + numbers, not red/green alone'. The old overlay was one red wash whose only variable was opacity. Each band now has its own colour, its own casing width (severity rises in thickness as well as hue) and a written legend label, and edges carrying vehicles get a numeric count chip. The traffic legend test compares the legend totals against the same filter src/layers.js applies, so the two cannot drift.",
+        "Access reachability reads the existing graph through findPath from each building's driveway node, and treats two buildings sharing one access point as reachable to each other, because the access node is shared by design (EVIDENCE E15). It is cached against net.version so it is not recomputed every frame.",
+        "Sound: the control starts on, shows its state through aria-pressed and a sound/mute icon, and writes through to world.settings.audio so a save carries the preference. The boot-time tool selection is gated behind a uiReady flag so creating an AudioContext is not attempted before any user gesture; a browser test counts AudioContext constructions to prove a muted game opens none.",
+        "Export downloads a real file through a Blob URL rather than writing silently to storage. Import is failure-isolated: the browser test asserts the full world state is byte-identical after both a malformed file and a structurally-valid-but-semantically-wrong snapshot, and that the player is told the city was not touched.",
+        "Deferred to S02.3: the traffic overlay's own visual refinement (junction mouth trim, junction fill polygons) is rendering work, not layer work. Deliberately NOT added: a Noise layer (no data, S06.3), and any Pollution layer (see above).",
+        "STATUS: implementation and every check in the task's Verify line pass, including the full browser interaction matrix the task asked for. Held at in_progress for the operator review checkpoint, consistent with S02.1 and S02.2a."
       ]
     },
     {
@@ -1229,6 +1281,21 @@
       "newTests": "test/browser/ui.js gains the dock/category structure, single-owner controller state, speed label, dirty-city confirmation and layout-metric checks. S02.2b adds the layer, mute, import/export and canvas-passthrough matrix.",
       "operatorDecision": "Operator selected the two-way split (S02.2a now, S02.2b next session) when offered against a three-way split and a single-session attempt. No requirement was removed: every S02.2 item is assigned to a, b, or both.",
       "rendererNote": "src/render.js is NOT modified by S02.2a. Overlay flags are read by the renderer only in S02.2b, so no renderer change is needed until then."
+    },
+    {
+      "id": "AMEND-S02.2-no-pollution-layer",
+      "date": "S02.2b",
+      "oldAssumption": "S02.2 item 3 asked for Traffic and Pollution layer toggles 'wired to real renderer flags', and src/render.js already carried `_drawPollution` plus a `showPollution` field, which made the layer look implementable.",
+      "evidence": "Source inspection found no pollution, environment or noise quantity anywhere in src/. `_drawPollution` painted a fixed 620wu radial gradient around every factory using hardcoded rgba values with no simulated field behind it, and no caller ever set `showPollution`, so the code was unreachable as well as invented. DESIGN section 5 requires showing 'only fields actually computed by core simulation' and explicitly forbids mock values; S02.2 item 6 separately says 'Do not: expose currency, noise, lane controls or buses before implementation'. Wiring the toggle to that method would therefore have shown a player fabricated data.",
+      "newContract": "S02.2b ships TWO layers, each declaring the simulated field it reads: Traffic (edge._congestion and edge._carCount) and Access (graph reachability between building driveway nodes). `_drawPollution` and the renderer's `showPollution`/`showCongestion` flags are DELETED, and the active overlay is owned by the UI controller instead. A Pollution layer and a Noise layer are deferred to S06.3, which owns environment and noise and will bring its own simulated field. Every layer must declare a `dataSource`; test/layers.test.js asserts that no layer may claim a pollution, noise, environment or emissions source, and test/browser/ui.js asserts the renderer no longer exposes the removed method or flags.",
+      "affectedIds": [
+        "S02.2",
+        "S02.2b",
+        "S02.3",
+        "S06.3"
+      ],
+      "newTests": "test/layers.test.js gains 'no pollution or noise layer exists, because no such field is simulated' and 'every declared layer names a real simulated data source'. test/browser/ui.js gains the same guard at the renderer surface, asserting `_drawPollution` is undefined and `showPollution` is absent.",
+      "operatorDecision": "Operator chose 'Traffic + Access only; delete the fake overlay' when offered the alternatives of leaving the fabricated code dead in the tree or building a real pollution model now. No requirement was removed: the Pollution and Noise layers move to S06.3, the task that owns the data they need."
     }
   ],
   "review": {

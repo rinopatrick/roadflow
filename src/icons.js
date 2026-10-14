@@ -38,6 +38,15 @@ export const ICONS = {
   load: '<path d="M12 13.5v-10"/><path d="M8 7.5l4-4 4 4"/><path d="M4.5 16v4h15v-4"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  layers: '<path d="M12 3.5l8.5 4.5-8.5 4.5-8.5-4.5z"/><path d="M3.5 12.5L12 17l8.5-4.5"/>',
+  traffic: '<path d="M4 8h9a3 3 0 0 1 0 6H8"/><path d="M10.5 11L8 14l2.5 3"/><path d="M17 6v12"/>',
+  access: '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/>'
+    + '<path d="M8.2 10.8L15.8 7.2M8.2 13.2l7.6 3.6"/>',
+  sound: '<path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/>'
+    + '<path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/><path d="M18 7a7 7 0 0 1 0 10"/>',
+  mute: '<path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/><path d="M16 9.5l4 5M20 9.5l-4 5"/>',
+  exportFile: '<path d="M12 3.5v10"/><path d="M8 9.5l4 4 4-4"/><path d="M4.5 16v4h15v-4"/>',
+  importFile: '<path d="M12 13.5v-10"/><path d="M8 7.5l4-4 4 4"/><path d="M4.5 16v4h15v-4"/>',
   help: '<circle cx="12" cy="12" r="8.5"/>'
     + '<path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.7-.9 1.3v.7"/><path d="M12 17v.01"/>',
 };
@@ -47,6 +56,8 @@ export const REQUIRED_ICON_IDS = [
   'select', 'road', 'avenue', 'highway', 'roundabout', 'light',
   'house', 'shop', 'factory', 'bulldoze', 'save', 'load',
   'close', 'help', 'menu',
+  // DESIGN section 2 requires an icon for layers and for sound.
+  'layers', 'sound', 'mute',
 ];
 
 /**

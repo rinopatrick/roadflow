@@ -7,9 +7,31 @@ import { roadDimensions } from './roadProfiles.js';
 import { getLegacyPhase } from './signals.js';
 import { BUILDING_DEFS } from './economy.js';
 import { UI_TOKENS, alpha } from './uiTokens.js';
+import { trafficOverlay, ACCESS_STATE } from './layers.js';
 
 const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
 const TERRAIN_RES = 1024;    // offscreen resolution
+const UI_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
+/**
+ * Overlay palettes. Kept here rather than in uiTokens.js because these are
+ * map-only analytic tints judged against terrain, not against a UI surface.
+ *
+ * Severity rises in BOTH hue and lightness, so the bands stay distinguishable
+ * in greyscale; the line thickness and the count chip carry the same signal
+ * again, which is what DESIGN section 1 means by "not red/green alone".
+ */
+const TRAFFIC_OVERLAY_STYLE = {
+  calm: { stroke: alpha(UI_TOKENS.accent, 0.45), chip: '#2c6b68' },
+  busy: { stroke: 'rgba(138, 81, 8, 0.55)', chip: '#8a5108' },
+  heavy: { stroke: 'rgba(190, 94, 18, 0.66)', chip: '#be5e12' },
+  jammed: { stroke: alpha(UI_TOKENS.danger, 0.72), chip: '#8f2b30' },
+};
+
+const ACCESS_OVERLAY_STYLE = {
+  reachable: { fill: 'rgba(20, 107, 104, 0.22)', stroke: alpha(UI_TOKENS.accent, 0.9) },
+  unreachable: { fill: 'rgba(163, 48, 54, 0.35)', stroke: UI_TOKENS.danger },
+};
 
 const PALETTE = {
   grass: '#efece3',
@@ -45,8 +67,8 @@ export class Renderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.cam = { x: 0, y: 0, zoom: 1 };
-    this.showCongestion = false;
-    this.showPollution = false;
+    // Which analytic overlay is showing is interface state and lives in
+    // src/ui/controller.js. It arrives with each draw call as `state.overlay`.
     this._terrain = null;
     this._terrainSeed = null;
     this._dpr = 1;
@@ -218,9 +240,11 @@ export class Renderer {
     // cars
     if (traffic) for (const car of traffic.cars.values()) this._drawCar(ctx, car, zoom);
 
-    // overlays
-    if (this.showCongestion) this._drawCongestion(ctx, net, zoom);
-    if (this.showPollution) this._drawPollution(ctx, eco, zoom);
+    // Analytic overlays. Exactly one can be active (DESIGN section 1), and the
+    // id comes from the controller rather than from a flag on the renderer, so
+    // the toggle control and the drawing can never disagree.
+    if (state.overlay === 'traffic') this._drawTrafficOverlay(ctx, net, zoom);
+    else if (state.overlay === 'access') this._drawAccessOverlay(ctx, state.accessStates, eco, zoom);
 
     // inspect highlight
     if (state.selected) this._drawSelection(ctx, state.selected, zoom, net, eco);
@@ -782,33 +806,92 @@ export class Renderer {
     ctx.restore();
   }
 
-  _drawCongestion(ctx, net, zoom) {
-    for (const edge of net.edges.values()) {
-      const c = edge._congestion || 0;
-      if (c < 0.08) continue;
+  /**
+   * Traffic layer: congestion as colour + line thickness + a number.
+   *
+   * DESIGN section 1: "Traffic overlay is colour + line thickness + numbers, not
+   * red/green alone." The previous version painted a single red wash whose only
+   * variable was opacity, which is unreadable in greyscale and carries no value.
+   * Each band gets its own colour and casing width, and edges carrying vehicles
+   * are labelled with the vehicle count, which is the number a player acts on.
+   */
+  _drawTrafficOverlay(ctx, net, zoom) {
+    const rows = trafficOverlay(net);
+    if (!rows.length) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const row of rows) {
+      const edge = net.edges.get(row.edgeId);
+      if (!edge) continue;
+      const style = TRAFFIC_OVERLAY_STYLE[row.tone] ?? TRAFFIC_OVERLAY_STYLE.calm;
+      // Thickness carries severity, so the band survives greyscale and colour
+      // blindness even before the label is read.
+      ctx.lineWidth = (roadDimensions(edge).width + 3 + row.level * 2.5) * zoom;
+      ctx.strokeStyle = style.stroke;
       this._pathPolyline(ctx, edge.pts, zoom);
-      ctx.lineWidth = (roadDimensions(edge).width + 3) * zoom;
-      ctx.strokeStyle = `rgba(226,87,76,${clamp(c, 0, 0.75)})`;
-      ctx.lineCap = 'round';
       ctx.stroke();
     }
+
+    // Numbers only for edges that actually hold vehicles, and only when they
+    // would be legible: a count on every quiet edge is noise, not information.
+    if (zoom >= 0.5) {
+      ctx.font = `${Math.round(11 * Math.min(zoom, 1.4))}px ${UI_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const row of rows) {
+        if (row.cars <= 0) continue;
+        const edge = net.edges.get(row.edgeId);
+        if (!edge?.pts?.length) continue;
+        const mid = edge.pts[Math.floor(edge.pts.length / 2)];
+        const [x, y] = this.worldToScreen(mid[0], mid[1]);
+        this._drawOverlayChip(ctx, x, y, String(row.cars), TRAFFIC_OVERLAY_STYLE[row.tone].chip);
+      }
+    }
+
+    ctx.restore();
   }
 
-  _drawPollution(ctx, eco, zoom) {
-    ctx.globalCompositeOperation = 'multiply';
-    for (const b of eco.buildings.values()) {
-      if (b.type !== 'factory') continue;
+  /**
+   * Access layer: which buildings can reach the road network and which cannot.
+   *
+   * `states` is the map from `accessOverlay`; the renderer only decides how to
+   * show it. Buildings with no route are the actionable ones, so they get the
+   * strong treatment and a ring, and reachable ones are drawn quietly.
+   */
+  _drawAccessOverlay(ctx, states, eco, zoom) {
+    if (!states || !eco?.buildings) return;
+    ctx.save();
+    for (const [id, info] of states) {
+      const b = eco.buildings.get(id);
+      if (!b) continue;
       const [x, y] = this.worldToScreen(b.x, b.y);
-      const r = 620 * zoom;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, 'rgba(200,190,150,0.5)');
-      g.addColorStop(1, 'rgba(220,215,200,0)');
-      ctx.fillStyle = g;
+      const s = (BUILDING_DEFS[b.type]?.size ?? 24) * zoom;
+      const unreachable = info.state !== ACCESS_STATE.REACHABLE;
       ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.arc(x, y, s * 0.85, 0, Math.PI * 2);
+      ctx.fillStyle = unreachable ? ACCESS_OVERLAY_STYLE.unreachable.fill : ACCESS_OVERLAY_STYLE.reachable.fill;
       ctx.fill();
+      ctx.lineWidth = (unreachable ? 2.4 : 1.4) * zoom;
+      ctx.strokeStyle = unreachable ? ACCESS_OVERLAY_STYLE.unreachable.stroke : ACCESS_OVERLAY_STYLE.reachable.stroke;
+      ctx.stroke();
     }
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+
+  /** A small rounded count chip, used by the traffic layer. */
+  _drawOverlayChip(ctx, x, y, text, fill) {
+    const padX = 5;
+    const w = ctx.measureText(text).width + padX * 2;
+    const h = 15;
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.fillStyle = UI_TOKENS.surfaceRaised;
+    ctx.fillText(text, x, y + 0.5);
   }
 
   _drawSelection(ctx, sel, zoom, net, eco) {
