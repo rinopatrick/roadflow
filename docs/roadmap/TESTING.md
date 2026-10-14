@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **280 passes** and `npm run test:browser` **46**, as of S02.2b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **309 passes** and `npm run test:browser` **48**, as of S02.3a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 ### Pitfall: verify a backup manifest from inside the backup
 
@@ -68,6 +68,20 @@ factory 1: fixture point [-150,270] maps to screen (490, 670), which is covered 
 
 Verify that guard in the red direction whenever a panel changes size.
 
+### Pitfall: a screenshot is not evidence that something was drawn
+
+The avenue centreline was **never drawn on a straight road**, and survived many sessions of screenshots. `_pathPolylineTrimmed` kept only existing vertices that fell inside the trim, so on a two-point road (`cum = [0, 450]`) both endpoints were outside the range and nothing was stroked at all. It only worked on curved or multi-point roads, which is what every earlier screenshot happened to show.
+
+No test asserted that a marking exists, only that its geometry was consistent, so a missing marking was invisible to the suite.
+
+When a change is about whether something is *drawn*, sample the canvas rather than looking at a PNG:
+
+```js
+const d = ctx.getImageData(x, y, 1, 1).data;   // rgb(248,231,166) = the centreline
+```
+
+A pixel probe caught in one run what visual inspection had missed for several sessions.
+
 ### Pitfall: an overlay must name the field it reads
 
 `src/render.js` carried a `_drawPollution` method that painted a fixed 620wu radial gradient around every factory, with hardcoded colours and **no simulated pollution field anywhere in the codebase**. Nothing ever set its flag, so it was unreachable as well as invented. Wiring the S02.2 Pollution toggle to it would have shown a player fabricated values, which DESIGN section 5 forbids.
@@ -99,10 +113,12 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend the runner to include later browser files |
 | `npm run test:browser` | S02.1 | **Extended.** test/browser/ui.js: ui.css tokens vs uiTokens.js, measured contrast ratios, icon-map shape, emoji-free controls, real inventory badges, focus ring and reduced motion, depleted stock, inspector title, plus 60 tool-state captures at 1440x900 and 1024x768 |
 | `node scripts/mutate-s021.mjs` | S02.1 | Mutation harness for the S02.1 guards; applies each mutation, runs test/browser/ui.js, restores the file and prints which tests failed |
-| `npm run test:browser` | S02.2b | **Extended.** test/browser/ui.js gains layer declarations backed by simulated data, one-layer-at-a-time with its labelled legend, the traffic legend counting the same edges the overlay draws, real access reachability, the sound toggle with an AudioContext counter proving no audio before a user gesture, export download plus bad-import isolation, the depletion reason and progression link, and compact inspector scrolling |
+| `npm run test:browser` | S02.3a | **Extended.** test/browser/ui.js gains a zoom sweep (0.25 / 1 / 3) over an avenue plus a T-junction, capturing the markings so the continuous-trim fix and the low-zoom gate can be inspected |
 | `node scripts/mutate-s022a.mjs` | S02.2a | Mutation harness for the S02.2a guards (10 mutations, 10 caught) |
 | `node --test test/layers.test.js` | S02.2b | **Created.** Overlay model: layer declarations name a real data source, traffic bands and thresholds, per-edge traffic rows, building reachability, one-overlay-at-a-time. Pure, no browser |
 | `node scripts/mutate-s022b.mjs` | S02.2b | Mutation harness for the S02.2b guards (12 mutations, 12 caught after one ineffective target was replaced) |
+| `node --test test/renderMarkings.test.js` | S02.3a | **Created.** Lane marking geometry: low-zoom dash gate, divider offsets and pavement containment, centreline visibility, trim growth and clamping, polyline trimming with interpolation, lane offsetting perpendicularity, degenerate input. Pure, no canvas |
+| `node scripts/mutate-s023a.mjs` | S02.3a | Mutation harness for the S02.3a guards (10 mutations, 10 caught; two further targets were proven redundant and removed rather than counted) |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |
 | `node --test test/coreState.test.js` | S01.1 | **Created.** RNG state, ID source, deterministic graph IDs |
