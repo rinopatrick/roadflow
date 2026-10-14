@@ -2,7 +2,7 @@
 
 ## 1. Current versus planned commands
 
-**Available now (after S00.2):**
+**Available now (after S01.7):**
 
 ```text
 npm test              # unit suite only, browser-free (fast)
@@ -10,9 +10,11 @@ npm run test:browser  # Playwright smoke with gameplay assertions
 npm run test:soak     # assertive economy soak (SOAK_SECONDS to shorten)
 npm run test:playtest # visual capture tour -> artifacts/<run-id>/
 npm start             # static server
+node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
+node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports 42 passes. Browser scripts now spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **265 passes** and `npm run test:browser` **17**, as of S01.7. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 ### Pitfall: verify a backup manifest from inside the backup
 
@@ -30,14 +32,56 @@ It exits 0 only when every manifest entry hashes correctly, 1 on any mismatch or
 
 `RF_RUN_ID` names the artifact directory. Reusing a name overwrites previous captures, so goldens cannot be compared across runs. Omit it for a timestamped directory, or use a fresh name per comparison.
 
+### Pitfall: mutation-check every non-trivial guard
+
+A test that passes proves nothing until you have seen it fail for the right reason. The discipline used throughout stage 01:
+
+1. write the fix and its tests
+2. revert the fix in the working copy (a `// MUTATION:` marker makes it easy to spot)
+3. confirm the expected tests fail
+4. restore and confirm they pass again
+5. verify no marker survives: `grep -rn MUTATION src/`
+
+**An ineffective mutation is not proof.** Stage 01 produced three that had to be replaced rather than counted:
+
+- *unreachable* — mutating `loadFromSave` did nothing because the menu handler's validation probe guards that path, so the mutated line never ran
+- *incomplete* — defaulting a missing schema version left the real future-version guard intact, so the test still passed for an unrelated reason
+- *wrong half* — reverting the lane *offset* formula reproduced nothing, because the actual defect was the pavement *width*; only the width mutation failed the containment tests
+
+When a mutation passes, decide which of these applies before concluding the test is weak, and report the distinction rather than quietly dropping the check.
+
+### Pitfall: browser tests share one page and leak state
+
+`test/browser/smoke.js` runs its cases against a single page in declaration order, so an earlier case can pollute a later one. Two real leaks occurred during S01.7:
+
+- a shop placed by one test made a later "no shop remains" assertion fail — scope assertions to the specific entity (by id), not to global counts
+- toast assertions picked up messages left by earlier cases — clear `#toasts` before acting when the assertion is about what the UI just said
+
+Also freeze the clock (`[data-speed="0"]`) before any assertion that compares positions across a save/load, or the running simulation races the comparison.
+
+### Pitfall: `ctx_batch_execute` and `ctx_execute` run shell through PowerShell here
+
+`&&`, `||`, backticks and `$(...)` fail or mangle output there. Use the `bash` tool for pipelines, greps and anything containing quotes or backticks. A PowerShell parse error is not a failing test.
+
 **Created during execution:**
 
 | Command | Owning task | Runs |
 |---|---|---|
-| `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend runner to include later browser files |
+| `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend the runner to include later browser files |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
-| `node --test test/simulationClock.test.js` | S01.1 | Targeted fixed-clock checks |
-| `node --test test/save.test.js` | S01.7 | Snapshot validation/migration/resume |
+| `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |
+| `node --test test/coreState.test.js` | S01.1 | **Created.** RNG state, ID source, deterministic graph IDs |
+| `node --test test/trafficAdvance.test.js` | S01.1 | **Created.** Residual distance, seeded spawns |
+| `node --test test/buildingIdentity.test.js` | S01.1b | **Created.** Deterministic building IDs, cosmetic RNG stream |
+| `node --test test/returnDispatch.test.js` | S01.2 | **Created.** Return-trip dispatch and lifecycle |
+| `node --test test/roadDimensions.test.js` | S01.3 | **Created.** Profile-derived pavement and lane containment |
+| `node --test test/signals.test.js` | S01.4 | **Created.** Phase schedule and clearance intervals |
+| `node --test test/congestion.test.js` | S01.4 | **Created.** Timestep-independent congestion metric |
+| `node --test test/construction.test.js` | S01.5 | **Created.** Road paths, crossings, splits, failure rollback |
+| `node --test test/bendYielding.test.js` | S01.5b | **Created.** Degree-2 bends vs real junctions |
+| `node --test test/access.test.js` | S01.6 | **Created.** Shared driveway ownership, placement evaluation |
+| `node --test test/live-edit.test.js` | S01.6 | **Created.** Reroute/cancel reconciliation |
+| `node --test test/save.test.js` | S01.7 | **Created.** Snapshot validation, migration, restore fidelity |
 | `node --test test/worldCommands.test.js` | S03.1 | Atomic commands/history |
 | `node --test test/lane-routing.test.js test/junctions.test.js` | S04.2 | Legal connector paths/reservations |
 | `node --test test/grades.test.js` | S05.1 | Grade-aware topology |
@@ -160,9 +204,9 @@ Every builder returns the canonical world shape `{net, eco, traffic, terrain}` p
 | transitCorridor |3stops, limited buses/capacity, full queues, legal walking access | S07.5/S07.6 |
 | mixedCity | Freight, bridge, signal, bus, crosswalk, incident, budget in one scene | S07.7 |
 
-### Tracked gap: eightCrossingsWorld
+### Resolved gap: eightCrossingsWorld (closed by S01.5)
 
-The builder declares `anchors.expectedJunctionCount === 8`, but the current crossing resolver produces **6**. This is a characterization test, not acceptance: `test/invariants.test.js` asserts today's 6 so that the S01.5 fix appears as a visible diff. When S01.5 lands, change the asserted value to `anchors.expectedJunctionCount` and delete the `GAP-E05-crossings` entry from `status.json`. Do not add a permanently skipped test instead.
+The builder declares `anchors.expectedJunctionCount === 8`, but the crossing resolver used to produce only **6**. That was pinned as a characterization test so the fix would appear as a visible diff. S01.5 replaced the bounded loop with an edge-frontier walk, the test now asserts the **target** (8), and `GAP-E05-crossings` is closed. The same fixture also caught a second defect in S01.5: a multi-point road between two already-connected junctions used to build nothing at all.
 
 ### Validator negative controls
 
