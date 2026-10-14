@@ -1237,6 +1237,292 @@ test('ui: lane markings stay readable across the zoom range', async () => {
   }
 });
 
+// ---------- S02.4a: camera projection, starter framing, Fit ----------
+
+test('ui: the projection is DPR-correct, at DPR 1 and DPR 2', async () => {
+  // Regression guard for the defect this task found: `worldToScreen` returned
+  // DEVICE pixels while `screenToWorld` took CSS pixels, so at DPR 2 the round
+  // trip was off by ~850-2963 wu and tool previews were offset on HiDPI displays.
+  for (const dpr of [1, 2]) {
+    const run = await launchGame({
+      baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, deviceScaleFactor: dpr,
+    });
+    try {
+      const { page } = run;
+      await dismissHelp(page);
+
+      const result = await page.evaluate(() => {
+        const R = window.__rf.renderer;
+        const v = R.view();
+        let worstCss = 0;
+        let worstDev = 0;
+        let scaled = true;
+        for (const zoom of [0.12, 1, 5]) {
+          R.cam.x = 37.5; R.cam.y = -120.25; R.cam.zoom = zoom;
+          for (const [x, y] of [[0, 0], [123.4, -567.8], [-1000, 2500]]) {
+            const css = R.worldToCss(x, y);
+            const backCss = R.screenToWorld(css[0], css[1]);
+            worstCss = Math.max(worstCss, Math.hypot(backCss[0] - x, backCss[1] - y));
+
+            const dev = R.worldToScreen(x, y);
+            const backDev = R.screenToWorld(dev[0] / v.dpr, dev[1] / v.dpr);
+            worstDev = Math.max(worstDev, Math.hypot(backDev[0] - x, backDev[1] - y));
+
+            if (Math.abs(dev[0] - css[0] * v.dpr) > 1e-9) scaled = false;
+            if (Math.abs(dev[1] - css[1] * v.dpr) > 1e-9) scaled = false;
+          }
+        }
+        return { worstCss, worstDev, scaled, view: v, reportedDpr: window.devicePixelRatio };
+      });
+
+      assert.equal(result.reportedDpr, dpr, `browser must run at DPR ${dpr}`);
+      assert.equal(result.view.dpr, dpr, `the renderer must read DPR ${dpr}, got ${result.view.dpr}`);
+      assert.equal(result.view.width, 1440, 'the view description is in CSS pixels');
+      assert.ok(result.worstCss < 1e-6,
+        `DPR ${dpr}: the CSS round trip must be exact, worst error ${result.worstCss} wu`);
+      assert.ok(result.worstDev < 1e-6,
+        `DPR ${dpr}: the device round trip must be exact, worst error ${result.worstDev} wu`);
+      assert.ok(result.scaled, `DPR ${dpr}: worldToScreen must be worldToCss * dpr`);
+    } finally {
+      await run.close();
+    }
+  }
+});
+
+test('ui: a new map is framed on a buildable starter region', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, seed: 7 });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+
+    const framed = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      const cam = { ...renderer.cam };
+      return {
+        cam,
+        centreBuildable: state.terrain.isBuildable(cam.x, cam.y),
+        biome: state.terrain.sample(cam.x, cam.y),
+        zoom: cam.zoom,
+      };
+    });
+
+    assert.equal(framed.zoom, 1, 'a fresh map opens at zoom 1');
+    assert.ok(framed.centreBuildable,
+      `the starter view must be centred on buildable ground, got biome ${framed.biome} at `
+      + `(${framed.cam.x}, ${framed.cam.y})`);
+
+    // The framed region must have room to build, not be a single buildable tile:
+    // most of a 600x400 rectangle around the camera centre must be buildable.
+    const fraction = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      let hits = 0; let total = 0;
+      for (let i = 0; i < 6; i++) {
+        for (let j = 0; j < 4; j++) {
+          const x = renderer.cam.x - 300 + (i + 0.5) * 100;
+          const y = renderer.cam.y - 200 + (j + 0.5) * 100;
+          total++;
+          if (state.terrain.isBuildable(x, y)) hits++;
+        }
+      }
+      return hits / total;
+    });
+    assert.ok(fraction >= 0.8,
+      `the starter region must be at least 80% buildable, measured ${Math.round(fraction * 100)}%`);
+
+    await page.screenshot({ path: `${shots}/ui-starter-seed7-desktop-1440x900.png` });
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: Fit frames the built city and the shortcut does the same', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, seed: 1 });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // Build well away from the starter view so Fit has real work to do.
+    const target = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 600; r <= 2200; r += 100) {
+        for (let a = 0; a < 360; a += 20) {
+          const x = renderer.cam.x + Math.cos(a * Math.PI / 180) * r;
+          const y = renderer.cam.y + Math.sin(a * Math.PI / 180) * r;
+          if (state.terrain.isRoadable(x, y)) return [Math.round(x), Math.round(y)];
+        }
+      }
+      return null;
+    });
+    assert.ok(target, 'fixture must find a roadable point away from the start');
+
+    await page.evaluate(([x, y]) => {
+      const r = window.__rf.renderer;
+      r.cam.x = x; r.cam.y = y; r.cam.zoom = 1.4;
+    }, target);
+    await page.waitForTimeout(150);
+
+    const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), target);
+    await page.keyboard.press('2');
+    await page.mouse.click(sx, sy);
+    await page.mouse.click(sx + 120, sy);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    // Push the camera far away, so Fit must actually reframe.
+    await page.evaluate(() => {
+      const r = window.__rf.renderer;
+      r.cam.x = 9000; r.cam.y = -9000; r.cam.zoom = 3;
+    });
+    await page.waitForTimeout(150);
+
+    const check = async (how) => {
+      const r = await page.evaluate(() => {
+        const { renderer, state } = window.__rf;
+        const v = renderer.view();
+        const pts = [];
+        for (const e of state.net.edges.values()) for (const p of e.pts) pts.push(p);
+        for (const b of state.eco.buildings.values()) pts.push([b.x, b.y]);
+        let outside = 0;
+        for (const [x, y] of pts) {
+          const [cx, cy] = renderer.worldToCss(x, y);
+          if (cx < 0 || cx > v.width || cy < 0 || cy > v.height) outside++;
+        }
+        return { outside, total: pts.length, cam: { ...renderer.cam } };
+      });
+      assert.ok(r.total > 0, 'fixture must have built something');
+      assert.equal(r.outside, 0,
+        `${how}: every road and building must be inside the viewport, ${r.outside} of ${r.total} were outside`);
+      return r;
+    };
+
+    // The button and the shortcut must agree.
+    await page.click('#fitbtn');
+    await page.waitForTimeout(150);
+    const viaButton = await check('Fit button');
+
+    await page.evaluate(() => {
+      const r = window.__rf.renderer;
+      r.cam.x = 9000; r.cam.y = -9000; r.cam.zoom = 3;
+    });
+    await page.keyboard.press('f');
+    await page.waitForTimeout(150);
+    const viaKey = await check('Fit shortcut');
+
+    assert.ok(Math.abs(viaButton.cam.x - viaKey.cam.x) < 1e-6
+      && Math.abs(viaButton.cam.y - viaKey.cam.y) < 1e-6
+      && Math.abs(viaButton.cam.zoom - viaKey.cam.zoom) < 1e-9,
+      `the button and the F key must frame identically: ${JSON.stringify(viaButton.cam)} vs ${JSON.stringify(viaKey.cam)}`);
+
+    await page.screenshot({ path: `${shots}/ui-fit-desktop-1440x900.png` });
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: zooming at the pointer holds the world anchor', async () => {
+  const { page } = game;
+  await page.evaluate(() => {
+    const r = window.__rf.renderer;
+    r.cam.x = 120; r.cam.y = -340; r.cam.zoom = 1;
+  });
+
+  const result = await page.evaluate(() => {
+    const R = window.__rf.renderer;
+    const v = R.view();
+    const pointer = [v.width * 0.72, v.height * 0.31];
+    const before = R.screenToWorld(pointer[0], pointer[1]);
+    for (const target of [0.5, 2, 4, 0.12, 5]) {
+      Object.assign(R.cam, R.zoomAt(pointer[0], pointer[1], target));
+      const after = R.screenToWorld(pointer[0], pointer[1]);
+      const moved = Math.hypot(after[0] - before[0], after[1] - before[1]);
+      if (moved >= 0.1) return { target, moved };
+    }
+    return { target: null, moved: 0 };
+  });
+  assert.equal(result.target, null,
+    `zoom ${result.target} moved the anchor ${result.moved} wu (must stay under 0.1)`);
+});
+
+test('ui: captures the HiDPI and wide layouts', async () => {
+  // S02.4 owns the DPR2 and wide-layout matrix (TESTING.md section 6: "DPR1/2 on
+  // camera/road/input tasks; 1920x1080 for wide layout"). These are full-page
+  // captures rather than the per-tool sweep: the point here is DPI and layout
+  // correctness, and the per-tool states are already covered at the two
+  // mandatory viewports.
+  const extras = [
+    { name: 'desktop-dpr2', width: 1440, height: 900, dpr: 2 },
+    { name: 'compact-dpr2', width: 1024, height: 768, dpr: 2 },
+    { name: 'wide-1920x1080', width: 1920, height: 1080, dpr: 1 },
+  ];
+
+  for (const vp of extras) {
+    const run = await launchGame({
+      baseUrl: server.baseUrl,
+      viewport: { width: vp.width, height: vp.height },
+      deviceScaleFactor: vp.dpr,
+    });
+    try {
+      const { page } = run;
+      await dismissHelp(page);
+      await page.click('[data-speed="0"]');
+
+      // Build a small city so the capture shows real content and Fit has a job.
+      const [cx, cy] = await page.evaluate(() => [window.__rf.renderer.cam.x, window.__rf.renderer.cam.y]);
+      await page.keyboard.press('2');
+      for (const [dx, dy] of [[-220, -90], [220, -90], [220, 120], [-220, 120], [-220, -90]]) {
+        const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), [cx + dx, cy + dy]);
+        await page.mouse.click(sx, sy);
+      }
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+      await page.click('#fitbtn');
+      await page.waitForTimeout(250);
+
+      const tag = `${vp.name}-seed1`;
+      await page.screenshot({ path: `${shots}/ui-${tag}-full.png` });
+
+      const metrics = await page.evaluate(() => {
+        const v = window.__rf.renderer.view();
+        const canvas = document.getElementById('game');
+        const box = id => {
+          const el = document.getElementById(id);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, w: r.width, h: r.height };
+        };
+        return {
+          view: v,
+          canvasBacking: { w: canvas.width, h: canvas.height },
+          canvasCss: { w: canvas.clientWidth, h: canvas.clientHeight },
+          band: box('topband'), dock: box('toolbar'), layers: box('layerbtns'),
+          vw: window.innerWidth, vh: window.innerHeight,
+        };
+      });
+
+      assert.equal(metrics.view.dpr, vp.dpr, `${vp.name}: renderer must read DPR ${vp.dpr}`);
+      assert.equal(metrics.canvasBacking.w, metrics.canvasCss.w * vp.dpr,
+        `${vp.name}: the backing store must be CSS width * DPR`);
+      assert.equal(metrics.canvasBacking.h, metrics.canvasCss.h * vp.dpr,
+        `${vp.name}: the backing store must be CSS height * DPR`);
+
+      for (const [name, b] of Object.entries({ band: metrics.band, dock: metrics.dock, layers: metrics.layers })) {
+        assert.ok(b, `${vp.name}: ${name} must exist`);
+        assert.ok(b.left >= -1 && b.right <= metrics.vw + 1,
+          `${vp.name}: ${name} must stay on screen horizontally (${b.left}..${b.right} of ${metrics.vw})`);
+        assert.ok(b.top >= -1 && b.bottom <= metrics.vh + 1,
+          `${vp.name}: ${name} must stay on screen vertically (${b.top}..${b.bottom} of ${metrics.vh})`);
+      }
+      assert.ok(metrics.dock.bottom <= metrics.vh + 1, `${vp.name}: the dock must stay above the fold`);
+
+      assert.deepEqual(run.errors.filter(e => !/favicon/.test(e)), [],
+        `${vp.name}: no console errors`);
+    } finally {
+      await run.close();
+    }
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

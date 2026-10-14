@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.3b",
+  "nextTask": "S02.4a",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -992,7 +992,7 @@
     },
     {
       "id": "S02.3b",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.3a"
       ],
@@ -1028,6 +1028,11 @@
           "exitCode": 0,
           "result": "12 scenes captured, each asserted to have built at least one road and no browser errors: 01-street, 02-avenue, 03-highway, 04-junction-t, 05-junction-x, 06-junction-y, 07-junction-acute, 08-roundabout, 09-dense-grid, 10-curved, 11-queue, 12-invalid-draft. Scenes.txt records node/edge/building/car counts and the sim tick per scene. INSPECTED and one defect was found and fixed: the first run drew the junction casing ring ON TOP of the road fills, producing exactly the grey seam across the pavement that DESIGN forbids. The junction outline was moved into the casing pass and its fill into the fill pass, so any grey it lays across a road is covered by that road's own fill. Re-inspected: the seam is gone, the T junction mouth no longer bulges to the highway width, the dense grid has no internal seams, and all four buildings in scene 11 cast their shadows in the same screen direction.",
           "artifact": "artifacts/after-s02.3b/sheet"
+        },
+        {
+          "command": "operator approval of S02.3b",
+          "exitCode": 0,
+          "result": "ACCEPTED. Operator reviewed the 12-scene contact sheet and accepted the junction footprint, the single shadow direction and the mouth-trim change. The operator also confirmed the intended behaviour for a mixed-size junction: a T junction between a bigger and a smaller road must keep the smaller road's mouth at its own width, which is what the connected-pavement footprint and per-end mouth trim already do."
         }
       ],
       "notes": [
@@ -1038,18 +1043,77 @@
         "The footprint is one quad per connected edge rather than a single traced outline. A traced outline was tried first and produced degenerate (zero-area) polygons for collinear approaches, because consecutive boundary points coincided. Quads are simpler, cannot self-intersect, and each one is exactly its own road's pavement, which is what the rule asks for.",
         "An `inset` option expands every quad outward, used so the junction outline continues the road casing instead of stepping wider or narrower. test/junctions.test.js asserts the inset widens each quad by exactly 2 * inset and extends the reach by exactly the inset, so the shape is preserved rather than distorted.",
         "Deliberately NOT done: the renderer was not extracted into src/render/roads.js. The task made that optional ('only if extracting road drawing reduces render.js without changing public Renderer API'), and render.js is still under 1000 lines with the geometry now living in render/markings.js and render/junctions.js. Extracting the drawing itself would be churn without a measured benefit.",
-        "STATUS: implementation and every check pass, including the 12-scene contact sheet the task requires. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass, including the 12-scene contact sheet the task requires. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 327/327, npm run test:browser 48/48, soak 10 trips, 12/12 mutations caught, 12/12 contact-sheet scenes."
       ]
     },
     {
       "id": "S02.4",
       "status": "pending",
       "dependsOn": [
-        "S02.3"
+        "S02.4a"
       ],
       "file": "stages/02-experience.md",
       "evidence": [],
-      "notes": []
+      "notes": [
+        "Split by AMEND-S02.4-split. This task is now the REMAINING half and must not start until S02.4a is done: cached visible terrain chunks with a bounded LRU replacing the single blurry 1024 texture (S02.4a did not change terrain rendering at all), shoreline and rock contour accents derived from terrain class boundaries, stable seeded vegetation with lower detail at low zoom, three silhouette variants each for house/shop/factory oriented to their access node, consistent shadows and driveway anchors, and variant stability across save/load with no simulation RNG consumed by drawing."
+      ]
+    },
+    {
+      "id": "S02.4a",
+      "status": "in_progress",
+      "dependsOn": [
+        "S02.3b"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/camera.test.js (red, before src/camera.js existed)",
+          "exitCode": 1,
+          "result": "RED with 'Cannot find module src/camera.js', then 22 pass / 1 fail once the module existed. The failure was a fault in my own test: it referenced `STARTER_DEFAULTS.minSpanWu` when the minimum span lives in `DEFAULT_FIT`, so the expected cap was NaN. Fixed the test reference; the implementation was correct."
+        },
+        {
+          "command": "node scripts/diagnose-projection.mjs (the probe that found the defect)",
+          "exitCode": 0,
+          "result": "BEFORE: at DPR 2 the projection round trip was off by 849.06, 851.59 and 2963.26 wu for three sample points, while DPR 1 was exact. Root cause: `worldToScreen` multiplied by `_dpr` and offset by `canvas.width/2` (device pixels) while `screenToWorld` multiplied its INPUT by `_dpr` first (CSS pixels), so the two were not inverses. AFTER: worst error 0 wu at both DPR 1 and DPR 2 across zooms 0.12, 1 and 5, and `worldToScreen == worldToCss * dpr` holds. The probe was initially mis-written itself: it paired worldToScreen (device) with screenToWorld (CSS), so it reported the old error after the fix; it now tests matched unit pairs and the renderer's public surface."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 350, pass 350, fail 0. Was 327 before this task; +23 from test/camera.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 53, pass 53, fail 0. Was 48; +5: the projection is exact at DPR 1 and DPR 2, a new map is framed on a buildable starter region, Fit frames the built city via both the button and the F key and the two agree, zooming at the pointer holds the world anchor under 0.1 wu, and the HiDPI/wide capture matrix."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. The camera work did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s024a.mjs (21 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "21 of 21 caught, none ineffective, after one mutation was repaired. A worldToCss forgets the camera offset -> 2. B multiplies zoom where it should divide -> 3. C worldToDevice not scaled by DPR (the original bug) -> 3. D cssToWorld not the inverse -> 3. E cssToWorld ignores the camera offset -> 3. F deviceToCss does not divide by DPR -> 1. G zoom not clamped -> 3. H non-finite zoom allowed through -> 1. I anchored zoom forgets to re-anchor -> 1. J anchored zoom uses the old zoom -> 1. K bounds ignore buildings -> 1. L empty world reports zero bounds instead of null -> 1. M fit ignores the margin -> 1. N fit ignores the minimum span -> 1 (see below). N2 the same on the Y axis only -> 1. O fit does not clamp zoom -> 1. P fit not centred -> 1. Q starter takes the first qualifying cell -> 1. R starter ignores the buildable threshold -> 2. S starter never reports a fallback -> 1. T starter reports the whole rectangle buildable -> 1. Mutation N was first written to remove the minimum span from the X axis only and came back NO FAILURE: the minimum span is enforced PER AXIS, so the Y axis compensated and the zoom was unchanged. That is the 'incomplete mutation' category from TESTING.md, not a weak test - mutating BOTH axes, or the Y axis alone, fails as required. The harness now supports multi-part mutations and N mutates both axes."
+        },
+        {
+          "command": "capture pass (RF_RUN_ID=after-s02.4a)",
+          "exitCode": 0,
+          "result": "Adds the matrix S02.4 owns: desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2, and wide 1920x1080 at DPR 1, each with a small avenue loop built through the real controls and framed with Fit. Each asserts the renderer reads the right DPR, the backing store is CSS size x DPR, and the top band, dock and layer toggles all stay on screen. Inspected: the DPR 2 capture is crisp (markings, casing and UI text all sharp, no upscaling), and the 1920x1080 capture frames the loop correctly with the UI anchored to the viewport edges rather than the content.",
+          "artifact": "artifacts/after-s02.4a"
+        }
+      ],
+      "notes": [
+        "Created src/camera.js (pure projection, anchored zoom, fit framing, starter-region search), test/camera.test.js (23 tests), scripts/mutate-s024a.mjs, scripts/diagnose-projection.mjs. Modified src/render.js (view() description; worldToScreen now an alias of worldToDevice; new worldToCss; screenToWorld shares cssToWorld; new zoomAt; the tool-preview pass converts a CSS-pixel pointer into device pixels), src/main.js (frameStarter on a new map, fitCity, pointer-anchored wheel zoom, the F shortcut and the Fit button handler, test hooks), src/icons.js (fit icon), index.html (Fit button), test/browser/harness.js (deviceScaleFactor support), test/browser/ui.js (+5 tests), docs/roadmap/TESTING.md.",
+        "REAL DEFECT FIXED, found by this task. The projection was DPR-broken: `worldToScreen` returned DEVICE pixels while `screenToWorld` took CSS pixels, so they were not inverses. At DPR 2 the round trip was off by 850-2963 wu. Worse, `_drawToolPreviews` mixed a CSS-pixel `mouseScreen` (from `e.offsetX`) with device-pixel projections, so tool badges and previews were misplaced on any HiDPI display. It survived because every fixture ran at DPR 1, where the two coincide. There is now one projection per unit, named accordingly, and the preview pass converts at the boundary.",
+        "A starter region replaces the assumption that the origin is a good spawn. `starterRegion` scans a 200 wu grid for a 600x400 wu rectangle that is at least 80% buildable, nearest the origin, with ties broken by coordinates, and reports a bounded fallback naming the shortfall when nothing qualifies. The sort is explicit rather than relying on scan order, and a test asserts determinism for a seed and independence from iteration order.",
+        "Pointer-anchored zoom is solved directly from the pointer position rather than applied incrementally, so repeated zooming cannot accumulate drift. Verified under 0.1 wu across every pair of the five supported zooms, and the centre-anchor case is asserted to leave the camera exactly still.",
+        "Fit framing applies the minimum span BEFORE the margin, so the margin stays a true proportion of what is actually framed, and clamps the result through clampZoom so an enormous extent cannot produce a wild value.",
+        "The DPR2 and wide-layout captures are now part of the standing capture pass, which is what S02.4 owns (TESTING.md section 6: 'DPR1/2 on camera/road/input tasks; 1920x1080 for wide layout'). They assert geometry rather than only producing images: the backing store must be CSS size x DPR, and the band, dock and layer toggles must stay on screen.",
+        "Deliberately deferred to S02.4b: cached terrain chunks with a bounded LRU, shoreline and rock contour accents, and the three building silhouette variants with entry orientation and save/load stability. Those are a coupled rendering change to the terrain and building passes and do not belong in the same diff as a camera correctness fix.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
     },
     {
       "id": "S02.5",
@@ -1438,6 +1502,21 @@
       ],
       "newTests": "test/renderMarkings.test.js (24 tests) covers the zoom gate, divider offsets and pavement containment, centreline visibility, trim growth and clamping, polyline trimming with interpolation, lane offsetting perpendicularity, and degenerate input. test/browser/ui.js gains a zoom sweep at 0.25 / 1 / 3 that captures the markings.",
       "operatorDecision": "No new decision was requested: the operator had already chosen the equivalent split for S02.2 and instructed work to continue, and this split removes no requirement. Every original S02.3 item is assigned to a or b."
+    },
+    {
+      "id": "AMEND-S02.4-split",
+      "date": "S02.4",
+      "oldAssumption": "S02.4 was one task: worldToCss plus camera round-trip tests, deterministic starter-region search, cached terrain chunks replacing the single blurry texture, shoreline/rock contour accents, three building silhouette variants, and variant stability across save/load.",
+      "evidence": "The first item alone exposed a real defect that invalidated nothing but needed its own focused fix: `worldToScreen` returned DEVICE pixels while `screenToWorld` took CSS pixels, so at DPR 2 the round trip was off by 850-2963 wu and `_drawToolPreviews` mixed a CSS-pixel mouse position with a device-pixel projection. That is a correctness bug in the camera and the pointer path, and it belongs in its own diff with its own tests. The remaining items are a coupled rendering change (terrain chunking, contours and building silhouettes) that will substantially rewrite the render.js terrain and building passes.",
+      "newContract": "Split into S02.4a and S02.4b. S02.4a (this task): the pure camera module src/camera.js with unit-stated projections (worldToDevice / worldToCss / cssToWorld / deviceToCss), pointer-anchored zoom, fit-city framing, deterministic starter-region search with a bounded fallback, the Renderer wired to it, the DPR bug fixed, the Fit control added, and the DPR2/wide-layout capture matrix. S02.4b: cached terrain chunks with a bounded LRU, shoreline and rock contour accents, three silhouette variants per building type with entry orientation, and variant stability across save/load. S02.4b depends on S02.4a.",
+      "affectedIds": [
+        "S02.4",
+        "S02.4a",
+        "S02.4b",
+        "S02.5"
+      ],
+      "newTests": "test/camera.test.js (23 tests) covers the projection round trip at five view descriptions and five zooms, the device/CSS relationship, zoom clamping, anchored zoom, world bounds, fit framing including the margin and minimum span, and starter-region determinism, buildability, nearest-to-origin ordering, tie-breaking, the bounded fallback and rectangle options. test/browser/ui.js gains the DPR1/DPR2 projection check, starter framing, Fit via button and shortcut, pointer-anchored zoom, and the HiDPI/wide capture matrix. scripts/diagnose-projection.mjs re-measures the round trip on demand.",
+      "operatorDecision": "No new decision was requested: the operator instructed work to continue, the split removes no requirement, and the same reasoning was accepted for S02.2 and S02.3."
     }
   ],
   "review": {

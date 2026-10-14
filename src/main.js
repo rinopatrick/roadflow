@@ -13,6 +13,7 @@ import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, a
 import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { reconcileTrafficAfterEdit } from './access.js';
 import { LEVEL_XP } from './economy.js';
+import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
 import { trafficOverlay, accessOverlay, accessSummary, ACCESS_STATE, TRAFFIC_BANDS } from './layers.js';
 import { ui } from './ui/controller.js';
 import { buildToolbar, setTool, TOOLS } from './ui/toolbar.js';
@@ -76,6 +77,37 @@ function newGame(seed = (() => {
     camera: renderer.cam,
     settings: { speed, audio: audioEnabled() },
   });
+
+  // A fresh map is framed on its starter region, not on the origin: the origin
+  // is water on some seeds.
+  frameStarter(terrain);
+}
+
+/**
+ * Frames the deterministic buildable starter region.
+ *
+ * `starterRegion` searches a 200 wu grid for a 600x400 wu rectangle that is at
+ * least 80% buildable, nearest the origin, and reports a bounded fallback when
+ * no such area exists. A fallback is told to the player rather than hidden,
+ * because the map really is restricted.
+ */
+function frameStarter(terrain) {
+  const region = starterRegion(terrain);
+  renderer.cam.x = region.x;
+  renderer.cam.y = region.y;
+  renderer.cam.zoom = 1;
+  if (region.fallback) toast(region.reason, 'warn');
+  return region;
+}
+
+/**
+ * Frames everything the player has built, with margin and a minimum span.
+ * An empty city falls back to the starter region rather than framing nothing.
+ */
+function fitCity() {
+  const bounds = boundsOfWorld(getWorld());
+  if (!bounds) { frameStarter(terrain); return; }
+  Object.assign(renderer.cam, fitBounds(bounds, renderer.view()));
 }
 
 /**
@@ -242,12 +274,9 @@ canvas.addEventListener('dblclick', () => {
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   const factor = Math.exp(-e.deltaY * 0.0012);
-  // world point under the cursor stays fixed while zooming
-  const [wx, wy] = renderer.screenToWorld(e.offsetX, e.offsetY);
-  renderer.cam.zoom = clamp(renderer.cam.zoom * factor, 0.12, 5);
-  const [nx, ny] = renderer.screenToWorld(e.offsetX, e.offsetY);
-  renderer.cam.x += wx - nx;
-  renderer.cam.y += wy - ny;
+  // Solved directly from the pointer position, so the world point under the
+  // cursor is fixed and repeated zooming cannot accumulate drift.
+  Object.assign(renderer.cam, renderer.zoomAt(e.offsetX, e.offsetY, renderer.cam.zoom * factor));
 }, { passive: false });
 
 function handlePrimary(wx, wy) {
@@ -490,6 +519,8 @@ window.addEventListener('keydown', (e) => {
   // A modal owns the keyboard, so a shortcut can never edit the city beneath it.
   if (ui.dialog) return;
 
+  if (e.key === 'f' || e.key === 'F') { fitCity(); return; }
+
   const t = TOOLS.find(t => t.key === e.key);
   if (t) { setTool(t.id); return; }
   if (e.key === 'Enter' && draft.length >= 2) { finishRoad(); return; }
@@ -594,6 +625,10 @@ const menu = initMenu({
 });
 
 document.getElementById('inspectClose').addEventListener('click', closeInspect);
+document.getElementById('fitbtn').addEventListener('click', () => {
+  fitCity();
+  sfx.click();
+});
 
 /**
  * Applies the sound setting to the audio module AND the control that shows it.
@@ -767,6 +802,11 @@ function boot() {
     get ui() { return ui; },
     get draftLength() { return draft.length; },
     get accessStates() { return currentAccessStates(); },
+    // Framing, so browser tests can assert the starter view and Fit without
+    // reaching into renderer internals.
+    frameStarter,
+    fitCity,
+    get camera() { return { ...renderer.cam }; },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };
