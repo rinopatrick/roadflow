@@ -7,12 +7,15 @@ import { RoadNetwork, ROAD_CLASS } from './roadNetwork.js';
 import { TrafficSim } from './traffic.js';
 import { Economy, BUILDING_DEFS } from './economy.js';
 import { Renderer } from './render.js';
-import { toast, openInspect, closeInspect, inspectOpen } from './ui.js';
-import { icon, mountIcons } from './icons.js';
+import { toast, openInspect, closeInspect, inspectOpen, showPanel } from './ui.js';
+import { mountIcons } from './icons.js';
 import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, autosave, importGame, exportGame, exportFilename, AUTOSAVE_INTERVAL_MS } from './save.js';
 import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
-import { cityCongestion, formatCongestion } from './metrics.js';
 import { reconcileTrafficAfterEdit } from './access.js';
+import { ui } from './ui/controller.js';
+import { buildToolbar, setTool, TOOLS } from './ui/toolbar.js';
+import { createHud } from './ui/hud.js';
+import { initMenu, openHelp, closeHelp } from './ui/menu.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -21,10 +24,18 @@ const renderer = new Renderer(canvas);
 let terrain, net, traffic, eco;
 let ids = createIdSource();   // world-owned ID source (deterministic, collision-free)
 let speed = 1;
-let tool = 'road';
 let draft = [];            // road draft control points
 let selected = null;
-let lastHud = 0;
+
+// `dirty` means the player has built something that is not in their own save.
+// Autosave deliberately does NOT clear it: the autosave slot is a safety net,
+// not the player's save, so discarding the city still deserves a prompt.
+let dirty = false;
+
+// The active tool lives in exactly one place — the UI controller. There is no
+// local mirror here, which is what used to let the dock, the canvas cursor and
+// the inspector disagree.
+const hud = createHud(() => ({ eco, traffic, net }));
 // NOTE: deliberately no separate `simTime` here. `traffic.time` is the single
 // simulation clock (CONTRACTS.md section 2). A second counter is what allowed
 // the renderer to display a phase the simulator was not obeying (EVIDENCE E04).
@@ -88,11 +99,12 @@ function replaceWorld(world) {
 
   bindWorldCallbacks();
   selected = null;
+  dirty = false;   // a freshly adopted world has no unsaved edits
   clock.reset();
   closeInspect();
   renderer.buildTerrain(terrain);
   updateBatchUI();
-  updateHud(true);
+  hud.update(true);
 }
 
 /** Reattaches behaviour that cannot be serialized. Called once per world. */
@@ -126,56 +138,6 @@ function loadFromSave({ source = 'manual' } = {}) {
     toast(`City loaded with ${result.warnings.length} note${result.warnings.length === 1 ? '' : 's'}.`, 'warn');
   }
   return true;
-}
-
-// ---------- tools ----------
-const TOOLS = [
-  { id: 'road', icon: 'road', label: 'Road', key: '1' },
-  { id: 'avenue', icon: 'avenue', label: 'Avenue', key: '2' },
-  { id: 'highway', icon: 'highway', label: 'Highway', key: '3' },
-  { id: 'roundabout', icon: 'roundabout', label: 'Roundabout', key: '4' },
-  { id: 'light', icon: 'light', label: 'Traffic light', key: '5' },
-  { id: 'house', icon: 'house', label: 'House', key: '6' },
-  { id: 'shop', icon: 'shop', label: 'Shop', key: '7' },
-  { id: 'factory', icon: 'factory', label: 'Factory', key: '8' },
-  { id: 'bulldoze', icon: 'bulldoze', label: 'Bulldoze', key: '9' },
-  { id: 'select', icon: 'select', label: 'Select', key: '0' },
-];
-
-function buildToolbar() {
-  const bar = document.getElementById('toolbar');
-  bar.innerHTML = '';
-  TOOLS.forEach((t, i) => {
-    if (i === 3 || i === 5 || i === 8) {
-      const sep = document.createElement('div');
-      sep.className = 'tool-sep';
-      bar.appendChild(sep);
-    }
-    const btn = document.createElement('button');
-    btn.className = 'tool-btn' + (t.id === tool ? ' active' : '');
-    btn.dataset.tool = t.id;
-    btn.type = 'button';
-    btn.setAttribute('aria-pressed', String(t.id === tool));
-    const isBuilding = t.id === 'house' || t.id === 'shop' || t.id === 'factory';
-    // Visible text plus a decorative icon; the accessible name is the label
-    // followed by the stock count, never the glyph.
-    btn.innerHTML = `${icon(t.icon)}<span class="label">${t.label}</span>${isBuilding ? `<span class="tool-count" id="badge_${t.id}">0</span>` : ''}`;
-    btn.title = `${t.label} (${t.key})`;
-    btn.addEventListener('click', () => setTool(t.id));
-    bar.appendChild(btn);
-  });
-}
-
-function setTool(id) {
-  tool = id;
-  draft = [];
-  canvas.className = 'tool-' + id;
-  document.querySelectorAll('.tool-btn').forEach(b => {
-    const on = b.dataset.tool === id;
-    b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', String(on));
-  });
-  sfx.click();
 }
 
 // ---------- input ----------
@@ -219,7 +181,8 @@ canvas.addEventListener('pointerup', () => {
 });
 
 canvas.addEventListener('dblclick', () => {
-  if (tool === 'road' || tool === 'avenue' || tool === 'highway') finishRoad();
+  const t = ui.activeTool;
+  if (t === 'road' || t === 'avenue' || t === 'highway') finishRoad();
 });
 
 canvas.addEventListener('wheel', (e) => {
@@ -234,7 +197,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 function handlePrimary(wx, wy) {
-  switch (tool) {
+  switch (ui.activeTool) {
     case 'road': case 'avenue': case 'highway': {
       draft.push([wx, wy]);
       sfx.road();
@@ -242,14 +205,15 @@ function handlePrimary(wx, wy) {
     }
     case 'roundabout': placeRoundabout(wx, wy); break;
     case 'light': placeLight(wx, wy); break;
-    case 'house': case 'shop': case 'factory': placeBuilding(tool, wx, wy); break;
+    case 'house': case 'shop': case 'factory': placeBuilding(ui.activeTool, wx, wy); break;
     case 'bulldoze': bulldoze(wx, wy); break;
     case 'select': select(wx, wy); break;
   }
 }
 
 function roadClass() {
-  return tool === 'avenue' ? 'avenue' : tool === 'highway' ? 'highway' : 'street';
+  const t = ui.activeTool;
+  return t === 'avenue' ? 'avenue' : t === 'highway' ? 'highway' : 'street';
 }
 
 function finishRoad() {
@@ -260,7 +224,7 @@ function finishRoad() {
     if (!terrain.isRoadable(x, y)) { toast('Roads can\'t cross water or rock!', 'warn'); return; }
   }
   const res = net.addRoad(draft, cls);
-  if (res.edgeIds.length) sfx.place();
+  if (res.edgeIds.length) { sfx.place(); dirty = true; }
   draft = [];
 }
 
@@ -271,6 +235,7 @@ function placeRoundabout(x, y) {
   const res = net.makeRoundabout(n.id);
   if (!res) { toast('That junction can\'t take a roundabout.', 'warn'); return; }
   sfx.place();
+  dirty = true;
   toast('Roundabout built — traffic circulates counterclockwise.');
 }
 
@@ -283,6 +248,7 @@ function placeLight(x, y) {
   n.type = 'light';
   if (!n.light) n.light = { cycle: 14, offset: 0, greenRatio: 0.42 };
   sfx.place();
+  dirty = true;
   net.version++;
   openLightInspect(n);
   selected = { kind: 'node', id: n.id };
@@ -316,6 +282,7 @@ function placeBuilding(type, x, y) {
   // b.rot is assigned by Economy.place() from its seeded RNG, so it is
   // reproducible for a given seed rather than re-randomised here.
   sfx.place();
+  dirty = true;
   updateBatchUI();
 }
 
@@ -327,6 +294,7 @@ function bulldoze(x, y) {
       eco.batch[b.type] = (eco.batch[b.type] || 0) + 1;
       reconcileTraffic([], [b.id]);
       sfx.bulldoze();
+      dirty = true;
       updateBatchUI();
       return;
     }
@@ -338,6 +306,7 @@ function bulldoze(x, y) {
     if (n.isRing || (n.edges.size && [...n.edges].some(eid => net.edges.get(eid)?.ring))) {
       // bulldozing any part of a roundabout removes the whole thing
       net.removeRoundabout(n.id);
+      dirty = true;
       toast('Roundabout removed.');
     } else if (n.type === 'driveway' && n.buildingIds?.length) {
       // Read the type BEFORE removing, so the refund matches what was destroyed.
@@ -351,10 +320,12 @@ function bulldoze(x, y) {
         eco.remove(ownerId);
         eco.batch[refundType] = (eco.batch[refundType] || 0) + 1;
         reconcileTraffic([], [ownerId]);
+        dirty = true;
         updateBatchUI();
       }
     } else {
       net.removeNode(n.id);
+      dirty = true;
     }
     sfx.bulldoze();
     net.version++;
@@ -379,6 +350,7 @@ function bulldoze(x, y) {
     }
     reconcileTraffic(removedEdgeIds);
     sfx.bulldoze();
+    dirty = true;
   }
 }
 
@@ -453,19 +425,15 @@ function select(x, y) {
 
 // ---------- keyboard ----------
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+  if (e.key === 'Escape') { escape(); return; }
+  // A modal owns the keyboard, so a shortcut can never edit the city beneath it.
+  if (ui.dialog) return;
+
   const t = TOOLS.find(t => t.key === e.key);
   if (t) { setTool(t.id); return; }
   if (e.key === 'Enter' && draft.length >= 2) { finishRoad(); return; }
-  if (e.key === 'Escape') {
-    if (document.getElementById('help').classList.contains('open')) {
-      document.getElementById('help').classList.remove('open');
-      return; // closing help must not change the tool
-    }
-    if (draft.length) { draft = []; return; }
-    if (inspectOpen()) { closeInspect(); return; }
-    return; // keep current tool — deliberate: Esc no longer jumps to Select
-  }
   if (e.key === ' ') {
     e.preventDefault();
     setSpeed(speed === 0 ? 1 : 0);
@@ -474,80 +442,66 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Delete' || e.key === 'Backspace') { setTool('bulldoze'); return; }
 });
 
-// ---------- speed controls ----------
-function setSpeed(s) {
-  speed = s;
-  document.querySelectorAll('.spd-btn').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.speed) === s));
+/** Escape cancels the innermost thing that is open, and nothing else. */
+function escape() {
+  if (ui.dialog) { closeHelp(); return; }
+  if (ui.openPanel === 'menu') { showPanel(null); return; }
+  if (draft.length) { draft = []; return; }
+  if (inspectOpen()) { closeInspect(); return; }
+  // Otherwise keep the current tool — deliberate: Esc no longer jumps to Select.
 }
 
-document.querySelectorAll('.spd-btn').forEach(b =>
-  b.addEventListener('click', () => setSpeed(parseFloat(b.dataset.speed))));
+// ---------- speed ----------
+function setSpeed(s) {
+  speed = s;
+  menu.applySpeed(s);
+}
 
-// ---------- menu ----------
-document.getElementById('btnSave').addEventListener('click', () => {
-  const res = saveGame(getWorld());
-  // Report what actually happened. The v1 handler printed "City saved." for a
-  // boolean, but the failure branch was easy to miss.
-  toast(res.ok ? 'City saved.' : `Save failed — ${res.error}`, res.ok ? '' : 'warn');
-  sfx.click();
+// ---------- menu and inspector ----------
+const menu = initMenu({
+  onSpeed: setSpeed,
+  onSave: () => {
+    const res = saveGame(getWorld());
+    // Report what actually happened. The v1 handler printed "City saved." for a
+    // boolean, but the failure branch was easy to miss.
+    if (res.ok) dirty = false;
+    toast(res.ok ? 'City saved.' : `Save failed — ${res.error}`, res.ok ? '' : 'warn');
+    sfx.click();
+  },
+  onLoad: () => {
+    // Distinguish "nothing saved" from "saved but damaged". The v1 handler
+    // checked only existence, so a corrupt save reported "No save found.", which
+    // is misleading and hid the fact that a backup may be recoverable.
+    const probe = loadGame({ hooks: {} });
+    if (!probe.ok && probe.empty) { toast('No save found.', 'warn'); return; }
+    if (!probe.ok) {
+      const hint = hasRecoverableBackup() ? ' Try Recover.' : '';
+      toast(`${probe.error}.${hint}`, 'warn');
+      return;
+    }
+    // Valid: adopt it. `loadFromSave` re-reads so the hooks are wired by
+    // replaceWorld rather than by this probe.
+    if (loadFromSave()) toast('City loaded.');
+    sfx.click();
+  },
+  onRecover: () => {
+    if (!hasRecoverableBackup()) { toast('No backup is available to recover.', 'warn'); return; }
+    if (loadFromSave({ source: 'backup' })) toast('Recovered the previous save.');
+    sfx.click();
+  },
+  onNewMap: () => {
+    // Only interrupt when there is something to lose (DESIGN section 1).
+    if (dirty && !confirm('Start a new map? Unsaved progress is lost.')) return;
+    newGame();
+    toast('New map generated.');
+  },
 });
-document.getElementById('btnLoad').addEventListener('click', () => {
-  // Distinguish "nothing saved" from "saved but damaged". The v1 handler checked
-  // only existence, so a corrupt save reported "No save found.", which is
-  // misleading and hid the fact that a backup may be recoverable.
-  const probe = loadGame({ hooks: {} });
-  if (!probe.ok && probe.empty) { toast('No save found.', 'warn'); return; }
-  if (!probe.ok) {
-    const hint = hasRecoverableBackup() ? ' Try Recover.' : '';
-    toast(`${probe.error}.${hint}`, 'warn');
-    return;
-  }
 
-  // Valid: adopt it. `loadFromSave` re-reads so the hooks are wired by
-  // replaceWorld rather than by this probe.
-  if (loadFromSave()) toast('City loaded.');
-  sfx.click();
-});
-document.getElementById('btnRecover').addEventListener('click', () => {
-  if (!hasRecoverableBackup()) { toast('No backup is available to recover.', 'warn'); return; }
-  if (loadFromSave({ source: 'backup' })) toast('Recovered the previous save.');
-  sfx.click();
-});
-document.getElementById('btnNew').addEventListener('click', () => {
-  if (!confirm('Start a new map? Unsaved progress is lost.')) return;
-  newGame();
-  toast('New map generated.');
-});
-document.getElementById('btnHelp').addEventListener('click', () => {
-  document.getElementById('help').classList.add('open');
-});
-document.getElementById('helpClose').addEventListener('click', () => {
-  document.getElementById('help').classList.remove('open');
-});
-document.getElementById('help').addEventListener('click', (e) => {
-  if (e.target.id === 'help') document.getElementById('help').classList.remove('open');
-});
 document.getElementById('inspectClose').addEventListener('click', closeInspect);
 
 // ---------- HUD ----------
-function updateHud(force) {
-  const now = performance.now();
-  if (!force && now - lastHud < 250) return;
-  lastHud = now;
-  document.getElementById('hLevel').textContent = eco.level;
-  const prev = eco.level > 1 ? 300 * (eco.level - 1) * (eco.level - 1) : 0;
-  const next = 300 * eco.level * eco.level;
-  document.getElementById('xpfill').style.width = clamp((eco.xp - prev) / (next - prev) * 100, 0, 100) + '%';
-  document.getElementById('hPop').textContent = eco.population();
-  document.getElementById('hTrips').textContent = eco.totalTrips;
-  const avg = traffic.stats.trips ? (traffic.stats.totalTripTime / traffic.stats.trips) : 0;
-  document.getElementById('hAvg').textContent = traffic.stats.trips ? avg.toFixed(0) + 's' : '—';
-  // Congestion is the share of present vehicles that are stopped, so it is
-  // displayed directly. The previous HUD divided by 0.6 to compensate for a
-  // broken EMA (EVIDENCE E03); that fudge is gone.
-  document.getElementById('hCong').textContent = formatCongestion(cityCongestion(net));
-}
-
+// Rendering the status band lives in src/ui/hud.js. Only the inventory badges
+// stay here, because they are the dock's own display of economy stock.
 function updateBatchUI() {
   // One stock source: the toolbar badges are the only inventory display. The
   // hidden #batch container that duplicated these numbers was removed with its
@@ -592,11 +546,11 @@ function loop(now) {
     preview: draft,
     mouseWorld,
     mouseScreen,
-    tool,
+    tool: ui.activeTool,
     simTime: traffic.time,
     selected,
   });
-  updateHud();
+  hud.update();
 
   requestAnimationFrame(loop);
 }
@@ -613,14 +567,27 @@ document.addEventListener('visibilitychange', () => {
 function boot() {
   renderer.resize();
   window.addEventListener('resize', () => renderer.resize());
-  buildToolbar();
+
+  // The active tool is published to the canvas class from ONE subscription, so
+  // the cursor and the dock cannot drift apart.
+  const applyTool = (id) => {
+    draft = [];                 // switching tools abandons any road draft
+    canvas.className = 'tool-' + id;
+  };
+  applyTool(ui.activeTool);
+  ui.subscribe((state, changed) => {
+    if (!changed.includes('activeTool')) return;
+    applyTool(state.activeTool);
+    sfx.click();
+  });
+
   mountIcons();
+  buildToolbar();
   setTool('road');
 
   // Recovery is only offered when a VALID backup exists, so the button cannot
   // promise something it cannot deliver.
-  const recoverBtn = document.getElementById('btnRecover');
-  if (recoverBtn) recoverBtn.style.display = hasRecoverableBackup() ? '' : 'none';
+  document.getElementById('btnRecover').hidden = !hasRecoverableBackup();
 
   // Never start a new city automatically. If a save exists but is unreadable, the
   // player is told and gets a fresh map deliberately, rather than silently.
@@ -650,10 +617,14 @@ function boot() {
     get state() { return { net, eco, traffic, terrain }; },
     get renderer() { return renderer; },
     get world() { return getWorld(); },
+    // The UI controller, so browser tests can assert the single owner rather
+    // than infer it from CSS classes.
+    get ui() { return ui; },
+    get draftLength() { return draft.length; },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };
-  document.getElementById('help').classList.add('open');
+  openHelp();
   requestAnimationFrame(loop);
 }
 

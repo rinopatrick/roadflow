@@ -1,10 +1,14 @@
-/* Roadflow UI stylesheet — design tokens and component states (S02.1).
+/* Roadflow UI stylesheet — design tokens, layout contract and component states.
  *
- * Moved verbatim out of index.html first, then tokenised: see DESIGN.md §2 for
- * the token set and src/uiTokens.js for the few canvas-facing colours that must
- * match these custom properties.
+ * S02.1 established the tokens and the control states. S02.2 restructured the
+ * layout to DESIGN section 1: one grouped status band across the top, a compact
+ * categorical dock with a contextual second row, a menu popover, and a right
+ * inspector that never covers the dock.
  *
- * Typography scale (DESIGN §2): UI base 14px, label 12px, section 16px,
+ * src/uiTokens.js holds the handful of canvas-facing colours that must match the
+ * custom properties below; test/browser/ui.js asserts every one of them.
+ *
+ * Typography scale (DESIGN section 2): UI base 14px, label 12px, section 16px,
  * major value 20px, body line-height 1.4, tabular numbers for statistics.
  * Controls are at least 40x40px, primary controls 44x44px.
  */
@@ -34,6 +38,13 @@
   --space-4: 16px;
   --space-6: 24px;
 
+  /* ---- layout contract (DESIGN section 1), measured by test/browser/ui.js ---- */
+  --gap: 16px;
+  --band-h: 56px;
+  --cat-row-h: 64px;   /* the dock's own row: DESIGN's "dock height 64px" */
+  --sub-row-h: 48px;   /* the compact contextual second row */
+  --dock-h: 124px;     /* 4px padding x2 + 48 + 4 gap + 64 */
+
   /* ---- derived values, not part of the published token set ---- */
   --surface-veil: rgba(251, 250, 246, 0.92); /* one quiet panel over the map */
   --hover: rgba(34, 42, 43, 0.06);
@@ -43,6 +54,10 @@
   --control-primary: 44px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* The dock hides subtools of closed categories and the menu popover with the
+   `hidden` attribute, which a `display: flex` class rule would otherwise beat. */
+[hidden] { display: none !important; }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -58,28 +73,104 @@ html, body {
 
 .icon { flex: none; display: block; width: 20px; height: 20px; }
 
-/* ---- Bottom tool dock: one surface, grouped controls ---- */
-#toolbar {
-  position: absolute; bottom: var(--space-4); left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+/* ---- Top status band: one grouped surface, not a pill per action ---- */
+#topband {
+  position: absolute; top: var(--gap); left: var(--gap); right: var(--gap);
+  height: var(--band-h);
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: 0 var(--space-4);
   background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-radius: var(--radius-lg); border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  z-index: 10; max-width: calc(100vw - 32px); overflow-x: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow); z-index: 10;
 }
-.tool-btn {
+#brand { display: flex; flex-direction: column; gap: 3px; }
+#cityname { font-weight: 700; font-size: 16px; color: var(--ink); letter-spacing: -0.01em; white-space: nowrap; }
+#xpbar { height: 6px; width: 132px; background: var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+#xpfill { height: 100%; width: 0%; background: var(--accent); border-radius: var(--radius-sm); transition: width .16s ease-out; }
+
+#stats { display: flex; align-items: center; gap: var(--space-4); margin-right: auto; }
+.stat { display: flex; flex-direction: column; line-height: 1.25; white-space: nowrap; }
+.stat .k { font-size: 12px; color: var(--muted); }
+.stat .v { font-size: 14px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+#topright { position: relative; display: flex; align-items: center; gap: var(--space-2); }
+
+/* ---- Speed: labelled Pause / 1x / 3x / 8x, never three look-alike glyphs ---- */
+#speedctl {
+  display: flex; align-items: center; gap: 2px; padding: 2px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+}
+.spd-btn {
+  min-width: var(--control-min); height: var(--control-min); padding: 0 var(--space-2);
+  border: none; border-radius: var(--radius-sm); background: transparent;
+  color: var(--muted); font-family: inherit; font-size: 14px; font-weight: 500;
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease-out, color .12s ease-out;
+}
+.spd-btn:hover { background: var(--hover); color: var(--ink); }
+.spd-btn.active { background: var(--accent); color: var(--surface-raised); }
+.spd-btn.active:hover { background: var(--accent); color: var(--surface-raised); }
+
+/* ---- Menu: one button that opens a grouped popover ---- */
+.icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: var(--control-min); height: var(--control-min);
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface);
+  color: var(--muted); cursor: pointer;
+  transition: background .12s ease-out, color .12s ease-out;
+}
+.icon-btn:hover { background: var(--hover); color: var(--ink); }
+#menupop {
+  position: absolute; top: calc(100% + var(--space-2)); right: 0; z-index: 20;
+  display: flex; flex-direction: column; gap: 2px; min-width: 180px; padding: var(--space-2);
+  background: var(--surface-raised); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: var(--shadow);
+}
+.menu-btn {
+  display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-min);
+  padding: 0 var(--space-3); border: none; border-radius: var(--radius-sm); background: transparent;
+  color: var(--ink); font-family: inherit; font-size: 14px; font-weight: 500;
+  text-align: left; cursor: pointer; transition: background .12s ease-out;
+}
+.menu-btn:hover { background: var(--hover); }
+.menu-btn:disabled { cursor: not-allowed; color: var(--muted); }
+
+/* ---- Bottom dock: context help, a compact second row, then the categories ---- */
+#dockarea {
+  position: absolute; bottom: var(--gap); left: 50%; transform: translateX(-50%); z-index: 10;
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
+  max-width: calc(100vw - 32px);
+}
+#ctxhelp {
+  font-size: 12px; color: var(--ink); white-space: nowrap;
+  background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3); box-shadow: var(--shadow-raised);
+}
+#ctxhelp:empty { display: none; }
+#toolbar {
+  display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-1);
+  background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow);
+  max-width: 760px; overflow-x: auto;
+}
+#categories { display: flex; align-items: center; gap: var(--space-1); height: var(--cat-row-h); }
+#subtools { display: flex; align-items: center; gap: var(--space-1); height: var(--sub-row-h); }
+
+.cat-btn, .tool-btn {
   display: flex; align-items: center; gap: var(--space-2);
-  min-height: var(--control-min); min-width: var(--control-min); padding: 0 var(--space-3);
-  background: transparent; border: 1px solid transparent; border-radius: var(--radius-md);
-  color: var(--muted); font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--radius-md); background: transparent;
+  color: var(--muted); font-family: inherit; font-size: 14px; font-weight: 500;
+  white-space: nowrap; user-select: none; cursor: pointer;
   transition: background .12s ease-out, color .12s ease-out, border-color .12s ease-out;
-  white-space: nowrap; user-select: none;
 }
-.tool-btn:hover { background: var(--hover); color: var(--ink); }
+.cat-btn { height: var(--control-primary); min-width: var(--control-primary); padding: 0 var(--space-3); }
+.tool-btn { height: var(--control-min); min-width: var(--control-min); padding: 0 var(--space-3); }
+.cat-btn:hover, .tool-btn:hover { background: var(--hover); color: var(--ink); }
+.cat-btn.open { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
 .tool-btn.active { background: var(--accent); border-color: var(--accent); color: var(--surface-raised); }
 .tool-btn.active:hover { background: var(--accent); color: var(--surface-raised); }
-.tool-sep { width: 1px; align-self: stretch; margin: var(--space-2) var(--space-1); background: var(--line); flex: none; }
+
 .tool-count {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 var(--space-1);
@@ -89,64 +180,31 @@ html, body {
   transition: background .12s ease-out, color .12s ease-out;
 }
 .tool-btn.active .tool-count { background: rgba(255, 255, 255, 0.22); color: var(--surface-raised); }
-/* Depleted stock stays legible and still selectable, so the map can explain
-   why the placement fails instead of the control going silently dead. */
+/* Depleted stock stays legible and still selectable, so the map can explain why
+   the placement fails instead of the control going silently dead. */
 .tool-btn.depleted { color: var(--muted); }
 .tool-btn.depleted .tool-count { background: var(--surface-raised); border: 1px solid var(--line); color: var(--danger); }
-.tool-btn:disabled { cursor: not-allowed; color: var(--muted); border-color: var(--line); }
+.cat-btn:disabled, .tool-btn:disabled { cursor: not-allowed; color: var(--muted); border-color: var(--line); }
 
-/* ---- Top-left status surface ---- */
-#hud { position: absolute; top: var(--space-4); left: var(--space-4); z-index: 10; display: flex; flex-direction: column; gap: var(--space-2); }
-.hud-card {
-  background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-radius: var(--radius-lg); border: 1px solid var(--line);
-  padding: var(--space-3) var(--space-4); color: var(--ink); box-shadow: var(--shadow);
-  font-size: 12px; min-width: 190px;
-}
-.hud-card .row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: 2px 0; }
-.hud-card .row .v { font-weight: 600; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
-#cityname { font-weight: 700; font-size: 16px; color: var(--ink); letter-spacing: -0.01em; }
-#xpbar { height: 6px; background: var(--line); border-radius: var(--radius-sm); margin-top: var(--space-1); overflow: hidden; }
-#xpfill { height: 100%; width: 0%; background: var(--accent); border-radius: var(--radius-sm); transition: width .16s ease-out; }
-
-/* ---- Speed and menu: one surface each, not one pill per button ---- */
-#topright { position: absolute; top: var(--space-4); right: var(--space-4); z-index: 10; display: flex; align-items: center; gap: var(--space-2); }
-#speedctl, #menu {
-  display: flex; align-items: center; gap: var(--space-1);
-  background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-radius: var(--radius-lg); border: 1px solid var(--line); padding: var(--space-1);
-  box-shadow: var(--shadow);
-}
-.spd-btn {
-  width: var(--control-min); height: var(--control-min); border: none; border-radius: var(--radius-md);
-  background: transparent; color: var(--muted); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: background .12s ease-out, color .12s ease-out;
-}
-.spd-btn:hover { background: var(--hover); color: var(--ink); }
-.spd-btn.active { background: var(--accent); color: var(--surface-raised); }
-.spd-btn.active:hover { background: var(--accent); color: var(--surface-raised); }
-.menu-btn {
-  display: flex; align-items: center; gap: var(--space-2);
-  min-height: var(--control-min); padding: 0 var(--space-3);
-  border: none; border-radius: var(--radius-md); background: transparent;
-  color: var(--muted); font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
-  transition: background .12s ease-out, color .12s ease-out;
-}
-.menu-btn:hover { background: var(--hover); color: var(--ink); }
-.menu-btn:disabled { cursor: not-allowed; color: var(--muted); }
-
-/* ---- Selection inspector ---- */
+/* ---- Selection inspector: hung below the band, never covering the dock ---- */
 #inspect {
-  position: absolute; right: var(--space-4); top: 102px; width: 240px; z-index: 10;
+  position: absolute; right: var(--gap);
+  top: calc(var(--gap) + var(--band-h) + var(--gap));
+  bottom: calc(var(--gap) + var(--dock-h) + var(--gap));
+  width: 296px; max-height: calc(100vh - 160px);
+  overflow-y: auto;
   background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-radius: var(--radius-lg); border: 1px solid var(--line); padding: var(--space-3) var(--space-4);
-  color: var(--ink); box-shadow: var(--shadow);
-  display: none;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4); color: var(--ink); box-shadow: var(--shadow);
+  z-index: 10; display: none;
 }
 #inspect.open { display: block; animation: panelin .16s ease-out; }
 @keyframes panelin { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-#inspect h3 { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); padding-right: 34px; font-size: 16px; font-weight: 600; color: var(--ink); }
+#inspect h3 {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin-bottom: var(--space-2); padding-right: 34px;
+  font-size: 16px; font-weight: 600; color: var(--ink);
+}
 #inspect .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
 #inspect label { font-size: 12px; color: var(--muted); display: block; margin-top: var(--space-2); font-weight: 500; }
 #inspect input[type=range] { width: 100%; accent-color: var(--accent); margin-top: 3px; }
@@ -159,7 +217,12 @@ html, body {
 #inspect .close:hover { background: var(--hover); color: var(--ink); }
 
 /* ---- Floating toasts, supplemental to the in-map explanation ---- */
-#toasts { position: absolute; bottom: 84px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); pointer-events: none; }
+#toasts {
+  position: absolute; bottom: calc(var(--gap) + var(--dock-h) + var(--space-6));
+  left: 50%; transform: translateX(-50%); z-index: 20;
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-1);
+  pointer-events: none;
+}
 .toast {
   background: var(--surface-raised); color: var(--ink); padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md); font-size: 12px; font-weight: 500;
@@ -192,12 +255,18 @@ html, body {
 }
 #help button:hover { background: #111418; }
 
-/* ---- Compact desktop: tighten the dock so no tool is pushed offscreen ---- */
+/* ---- Compact desktop: tighten the band, dock the inspector as a sheet ---- */
+@media (max-width: 1200px) {
+  #topband { gap: var(--space-3); padding: 0 var(--space-3); }
+  #stats { gap: var(--space-3); }
+  #xpbar { width: 96px; }
+}
+
 @media (max-width: 1100px) {
   #toolbar { padding: var(--space-1); }
-  .tool-btn { padding: 0 var(--space-2); gap: var(--space-1); }
-  .tool-sep { margin: var(--space-2) 2px; }
-  .menu-btn { padding: 0 var(--space-2); gap: var(--space-1); }
+  .cat-btn, .tool-btn { padding: 0 var(--space-2); gap: var(--space-1); }
+  /* The inspector becomes a sheet flush to the right edge, still clear of the dock. */
+  #inspect { right: 0; border-radius: var(--radius-lg) 0 0 var(--radius-lg); }
 }
 
 /* ---- Non-essential motion off ---- */
