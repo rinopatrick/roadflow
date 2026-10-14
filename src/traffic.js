@@ -63,7 +63,28 @@ export class TrafficSim {
     this.cars = new Map();
     this.time = 0;
     this.bucket = 0;       // spawn bucket timer
-    this.stats = { trips: 0, totalTripTime: 0, waiting: 0 };
+    this.stats = { trips: 0, totalTripTime: 0, waiting: 0, cancelled: 0 };
+  }
+
+  /**
+   * Ends a trip early and records WHY.
+   *
+   * Used when a live edit destroys a route (EVIDENCE E16). Previously such cars
+   * were marked dead and dropped from the map with no counter and no reason, so a
+   * failed trip was indistinguishable from a completed one in the stats.
+   *
+   * Deliberately does NOT touch `stats.trips` or award XP: an edit must not be
+   * able to farm progress by deleting the road under a car.
+   */
+  cancelCar(car, reason = 'cancelled') {
+    if (!car || car.dead) return false;
+    car.dead = true;
+    car.cancelled = true;
+    car.cancelReason = reason;
+    this.stats.cancelled++;
+    this.cars.delete(car.id);
+    if (car.onCancel) car.onCancel(car, reason);
+    return true;
   }
 
   // Spawn a car from nodeId to nodeId. Returns Car or null.
