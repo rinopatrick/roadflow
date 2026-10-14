@@ -8,7 +8,10 @@ import { getLegacyPhase } from './signals.js';
 import { BUILDING_DEFS } from './economy.js';
 import { UI_TOKENS, alpha } from './uiTokens.js';
 import { trafficOverlay, ACCESS_STATE } from './layers.js';
-import { laneMarkings, trimPolyline, offsetPolyline } from './render/markings.js';
+import { laneMarkings, trimPolyline, trimPolylineEnds, offsetPolyline } from './render/markings.js';
+import {
+  capForNode, junctionFootprint, edgeEndTrims, shadowOffset, offsetInRotatedFrame,
+} from './render/junctions.js';
 
 const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
 const TERRAIN_RES = 1024;    // offscreen resolution
@@ -48,6 +51,7 @@ const PALETTE = {
   forestDark: '#647f4d',
   road: '#ffffff',
   roadOutline: '#b9b6ac',
+  roadShadow: 'rgba(60, 58, 50, 0.18)',
   laneDash: '#d8d5ca',
   centerline: '#f2cf4e',
   highwayOutline: '#2e2e2e',
@@ -178,6 +182,7 @@ export class Renderer {
   draw(state) {
     const { ctx, canvas } = this;
     const { net, traffic, eco, terrain, preview } = state;
+    this._net = net;
     if (!this._terrain || this._terrainSeed !== terrain.seed) this.buildTerrain(terrain);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -220,12 +225,18 @@ export class Renderer {
       }
     }
 
-    // roads — three passes so junction areas merge cleanly like Trafficity:
-    // soft shadow, then every casing, then every fill on top covering the
-    // crossing casings (outlines never cut through junction interiors).
+    // roads — passes so junction areas merge cleanly: soft shadow, every casing,
+    // every fill on top covering the crossing casings (outlines never cut through
+    // junction interiors), then the junction footprints themselves.
     for (const edge of net.edges.values()) this._drawEdgeShadow(ctx, edge, zoom);
     for (const edge of net.edges.values()) this._drawEdgeCasing(ctx, edge, zoom);
+    // The junction outline belongs to the CASING pass, not after the fills: drawn
+    // on top it would cut a grey seam straight across the pavement, which DESIGN
+    // section 3 forbids ('hide internal seam/casing strokes').
+    this._drawJunctionCasing(ctx, net, zoom);
     for (const edge of net.edges.values()) this._drawEdgeFill(ctx, edge, zoom);
+    this._drawJunctionFill(ctx, net, zoom);
+    for (const edge of net.edges.values()) this._drawEdgeMarkings(ctx, edge, net, zoom);
 
     // roundabout islands (grass center inside each ring)
     this._drawIslands(ctx, net, zoom);
@@ -269,7 +280,9 @@ export class Renderer {
     this._pathPolyline(ctx, pts, zoom);
     // fill px width + casing that shrinks slower than zoom so outlines stay visible
     ctx.lineWidth = Math.max(d.width * zoom, 3.2) + Math.max(2.4 * zoom, 1);
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // Squared at a junction, so the casing cannot bulge into the disk DESIGN
+    // section 3 rules out. The junction footprint pass supplies the outline there.
+    ctx.lineCap = this._capForEdge(edge); ctx.lineJoin = 'round';
     ctx.strokeStyle = edge.cls === 'highway' ? PALETTE.highwayOutline : PALETTE.roadOutline;
     ctx.stroke();
   }
@@ -280,35 +293,114 @@ export class Renderer {
     if (!pts || pts.length < 2) return;
     this._pathPolyline(ctx, pts, zoom);
     ctx.lineWidth = Math.max(d.width * zoom, 3.2) + Math.max(2.4 * zoom, 1);
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(60, 58, 50, 0.18)';
+    ctx.lineCap = this._capForEdge(edge); ctx.lineJoin = 'round';
+    ctx.strokeStyle = PALETTE.roadShadow;
     ctx.stroke();
   }
 
+  /**
+   * Cap style for an edge: rounded only where BOTH ends are bends or dead ends.
+   *
+   * A round cap at a shared junction node extends half the pavement width in
+   * every direction from the node centre, so the union of round caps at a
+   * junction is exactly the circular disk DESIGN section 3 rules out.
+   */
+  _capForEdge(edge) {
+    return capForNode(Math.max(this._nodeDegree(edge.a), this._nodeDegree(edge.b)));
+  }
+
+  _nodeDegree(nodeId) {
+    return this._net ? (this._net.nodes.get(nodeId)?.edges.size ?? 0) : 0;
+  }
+
+  /** Pavement fill only. Markings are their own pass, drawn after the junctions. */
   _drawEdgeFill(ctx, edge, zoom) {
     const cls = roadDimensions(edge);
     const pts = edge.pts;
     if (!pts || pts.length < 2) return;
 
-    // fill (round caps extend half-width past the node, covering casing stubs)
     // clamp: keep roads readable as white ribbons when zoomed far out
-    const w = Math.max(cls.width * zoom, 3.2);
     this._pathPolyline(ctx, pts, zoom);
-    ctx.lineWidth = w;
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(cls.width * zoom, 3.2);
+    ctx.lineCap = this._capForEdge(edge); ctx.lineJoin = 'round';
     ctx.strokeStyle = PALETTE.road;
     ctx.stroke();
+  }
 
-    // Marking geometry comes from src/render/markings.js: the divider offsets,
-    // the trim that keeps them out of junction mouths, and the zoom gate that
-    // hides dashes rather than painting sub-pixel hairlines.
-    const length = edge.cum[edge.cum.length - 1];
-    const marks = laneMarkings(edge, zoom, length);
+  /**
+   * Junction pavement, drawn AFTER every edge fill and BEFORE the markings.
+   *
+   * A junction's outline is produced by filling an inset-expanded footprint in
+   * the casing colour, then the true footprint in the road colour: the interior
+   * is covered, leaving only an outer ring. Stroking each quad individually
+   * would draw a visible seam wherever two quads overlap, which DESIGN forbids.
+   */
+  /**
+   * Every node that is a real junction: 3+ connected edges. A degree-2 node is a
+   * BEND (S01.5b), where a round join of the widest connected pavement is already
+   * geometrically correct and a footprint would be wrong.
+   */
+  _junctionNodes(net) {
+    return [...net.nodes.values()].filter(n => n.edges.size >= 3);
+  }
 
-    // Lane divider dashes, positioned by the same lane-centre model that places
-    // vehicles, so a dash always sits exactly between two lanes.
+  /**
+   * The junction outline, drawn with the road casings and therefore UNDER the
+   * pavement fills. Any grey it lays across a road is covered by that road's own
+   * fill, so no seam survives.
+   *
+   * The inset matches the edge casing's per-side extension, so the junction
+   * outline continues the road casing rather than stepping wider or narrower.
+   */
+  _drawJunctionCasing(ctx, net, zoom) {
+    const inset = Math.max(2.4 * zoom, 1) / 2;
+    for (const node of this._junctionNodes(net)) {
+      const outer = junctionFootprint(net, node, { inset });
+      if (outer.quads.length) this._fillQuads(ctx, outer.quads, zoom, PALETTE.roadOutline);
+    }
+  }
+
+  /** The junction pavement, drawn with the road fills and therefore on top of the
+   * junction casing, leaving only its outer rim visible. */
+  _drawJunctionFill(ctx, net, zoom) {
+    for (const node of this._junctionNodes(net)) {
+      const inner = junctionFootprint(net, node);
+      if (inner.quads.length) this._fillQuads(ctx, inner.quads, zoom, PALETTE.road);
+    }
+  }
+
+  _fillQuads(ctx, quads, zoom, colour) {
+    ctx.save();
+    ctx.fillStyle = colour;
+    for (const quad of quads) {
+      ctx.beginPath();
+      for (let k = 0; k < quad.length; k++) {
+        const [x, y] = this.worldToScreen(quad[k][0], quad[k][1]);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Lane markings, on top of every pavement fill and junction footprint.
+   *
+   * Split out of the fill pass so a junction's pavement can never be painted
+   * over a marking that was already drawn.
+   */
+  _drawEdgeMarkings(ctx, edge, net, zoom) {
+    const pts = edge.pts;
+    if (!pts || pts.length < 2) return;
+
+    // Per-end trim: a junction end is cleared as far as the widest CONNECTED
+    // pavement reaches, which is not the same as this road's own width.
+    const trims = edgeEndTrims(net, edge);
+    const marks = laneMarkings(edge, zoom, edge.cum[edge.cum.length - 1]);
+    const span = trimPolylineEnds(pts, edge.cum, trims.start, trims.end);
+
     if (marks.showDashes && marks.dividerOffsets.length) {
-      const span = trimPolyline(pts, edge.cum, marks.trim);
       ctx.strokeStyle = PALETTE.laneDash;
       ctx.lineWidth = marks.dashWidth;
       ctx.setLineDash(marks.dash);
@@ -320,12 +412,12 @@ export class Renderer {
       ctx.setLineDash([]);
     }
 
-    // Yellow centreline, trimmed at junction mouths. Omitted where there is no
-    // median to divide, which includes every one-way and ring edge.
+    // Yellow centreline, omitted where there is no median to divide, which
+    // includes every one-way and ring edge.
     if (marks.showCentreline) {
       ctx.lineWidth = marks.centrelineWidth;
       ctx.strokeStyle = PALETTE.centerline;
-      this._strokeWorldPolyline(ctx, trimPolyline(pts, edge.cum, marks.trim), zoom);
+      this._strokeWorldPolyline(ctx, span, zoom);
     }
   }
 
@@ -728,9 +820,13 @@ export class Renderer {
     ctx.translate(x, y);
     ctx.rotate(rot);
 
-    // ground shadow
+    // Ground shadow, in the fixed screen direction. The offset is counter-rotated
+    // because this block is inside ctx.rotate(rot): applying (+3,+4) directly made
+    // the shadow rotate with the building, so a rotated house cast it up-and-left
+    // while its neighbour cast down-and-right (DESIGN section 3).
+    const bShadow = offsetInRotatedFrame(rot, ...shadowOffset(1));
     ctx.fillStyle = 'rgba(0,0,0,0.13)';
-    this._roundRect(ctx, -s / 2 + 3 * zoom, -s / 2 + 4 * zoom, s, s, 3 * zoom);
+    this._roundRect(ctx, -s / 2 + bShadow[0] * zoom, -s / 2 + bShadow[1] * zoom, s, s, 3 * zoom);
     ctx.fill();
 
     // side (extrusion)
@@ -781,9 +877,11 @@ export class Renderer {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(car.dir);
-    // drop shadow
+    // Drop shadow, in the same fixed screen direction as every other object.
+    // Scaled down because a car is low: physical height scales the shadow.
+    const cShadow = offsetInRotatedFrame(car.dir, ...shadowOffset(0.37));
     ctx.fillStyle = 'rgba(0,0,0,0.16)';
-    this._roundRect(ctx, -L / 2 + 1.1, -W / 2 + 1.5, L, W, 1.2 * zoom);
+    this._roundRect(ctx, -L / 2 + cShadow[0], -W / 2 + cShadow[1], L, W, 1.2 * zoom);
     ctx.fill();
     // body
     ctx.fillStyle = car.color;

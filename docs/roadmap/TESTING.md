@@ -14,7 +14,9 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **309 passes** and `npm run test:browser` **48**, as of S02.3a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **327 passes** and `npm run test:browser` **48**, as of S02.3b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+
+`node scripts/contact-sheet.mjs` is a review artifact, not a test: it builds the twelve DESIGN section 3 scenes through the real controls, freezes the clock, captures each to `artifacts/<run-id>/sheet/`, and asserts only that every scene built at least one road and produced no browser errors. Inspect the images; the assertion only prevents an empty capture from being mistaken for a pass.
 
 ### Pitfall: verify a backup manifest from inside the backup
 
@@ -68,6 +70,31 @@ factory 1: fixture point [-150,270] maps to screen (490, 670), which is covered 
 
 Verify that guard in the red direction whenever a panel changes size.
 
+### Pitfall: a round stroke cap at a junction IS the circular disk
+
+DESIGN forbids painting "a circular disk over every junction at every scale". It is easy to think you are not doing that when no code draws a circle. But every edge was stroked with `lineCap = 'round'`, and all edges at a node share that node's centre — so the union of round caps at a junction is exactly a disk of radius = the widest connected pavement. A wide avenue meeting a narrow street painted a blob wider than the street.
+
+The fix is `capForNode(degree)`: round for a degree-2 BEND (where the pavement genuinely curves), square for 3+ (where the junction's own footprint supplies the fill).
+
+Same trap for shadows: an offset applied inside `ctx.rotate(rot)` rotates with the object. Use `offsetInRotatedFrame` to keep one fixed screen direction.
+
+### Pitfall: a tautological assertion moves both sides together
+
+A mutation that sets a constant to 0 will not fail a test written as `assert.equal(f(x), base + CONSTANT)`, because both sides become `base`. Assert the property POSITIVELY instead:
+
+```js
+assert.ok(CONSTANT > 0, 'the margin must be a positive clearance');
+assert.ok(trim > widest, 'the trim must exceed the widest pavement');
+```
+
+Three of the twelve S02.3b mutations came back ineffective for reasons like this. All three were gaps in the tests, not redundant code — two others in S02.3a were genuinely redundant and were proven so by deleting them. Distinguish the two cases before dropping a mutation.
+
+### Pitfall: a symmetric fixture cannot detect a sign error
+
+`edgeDirectionAt` reads the polyline from whichever end touches the node. A straight edge is symmetric, so reading the wrong end produces the same direction and every test still passes. Detecting it needs a fixture whose edge BENDS just after the junction.
+
+When a function has a branch on "which end am I at", the fixture must be asymmetric.
+
 ### Pitfall: a screenshot is not evidence that something was drawn
 
 The avenue centreline was **never drawn on a straight road**, and survived many sessions of screenshots. `_pathPolylineTrimmed` kept only existing vertices that fell inside the trim, so on a two-point road (`cum = [0, 450]`) both endpoints were outside the range and nothing was stroked at all. It only worked on curved or multi-point roads, which is what every earlier screenshot happened to show.
@@ -119,6 +146,9 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node scripts/mutate-s022b.mjs` | S02.2b | Mutation harness for the S02.2b guards (12 mutations, 12 caught after one ineffective target was replaced) |
 | `node --test test/renderMarkings.test.js` | S02.3a | **Created.** Lane marking geometry: low-zoom dash gate, divider offsets and pavement containment, centreline visibility, trim growth and clamping, polyline trimming with interpolation, lane offsetting perpendicularity, degenerate input. Pure, no canvas |
 | `node scripts/mutate-s023a.mjs` | S02.3a | Mutation harness for the S02.3a guards (10 mutations, 10 caught; two further targets were proven redundant and removed rather than counted) |
+| `node --test test/junctions.test.js` | S02.3b | **Created.** Junction cap style, footprint quads at each own width, the inset, per-end mouth trim from the widest connected pavement, edge direction at a node, shadow direction and counter-rotation. Pure, no canvas |
+| `node scripts/contact-sheet.mjs` | S02.3b | **Created.** Review artifact: the twelve DESIGN section 3 scenes at 1440x900, frozen clock, each asserted non-empty. Inspect the images |
+| `node scripts/mutate-s023b.mjs` | S02.3b | Mutation harness for the S02.3b guards (12 mutations, 12 caught after three ineffective targets exposed test gaps that were then fixed) |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |
 | `node --test test/coreState.test.js` | S01.1 | **Created.** RNG state, ID source, deterministic graph IDs |
