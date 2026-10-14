@@ -1200,6 +1200,43 @@ test('ui: the compact inspector scrolls instead of overflowing', async () => {
   }
 });
 
+test('ui: lane markings stay readable across the zoom range', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // An avenue with a side street: a road class that has interior dividers, and
+    // a junction whose mouth the markings must not cross.
+    await page.keyboard.press('2'); // avenue
+    await page.mouse.click(500, 420);
+    await page.mouse.click(950, 420);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('1'); // street
+    await page.mouse.click(720, 420);
+    await page.mouse.click(720, 580);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size >= 2, null, { timeout: 10000 });
+
+    const zooms = [0.25, 1, 3];
+    for (const zoom of zooms) {
+      const drawn = await page.evaluate((z) => {
+        window.__rf.renderer.cam.zoom = z;
+        return window.__rf.renderer.cam.zoom;
+      }, zoom);
+      assert.equal(drawn, zoom, `the camera must accept zoom ${zoom}`);
+      await page.waitForTimeout(250);
+      await page.screenshot({ path: `${shots}/ui-markings-zoom${zoom}-desktop-1440x900-seed1.png` });
+    }
+
+    assert.deepEqual(run.errors.filter(e => !/favicon/.test(e)), [],
+      'no console errors across the zoom sweep');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

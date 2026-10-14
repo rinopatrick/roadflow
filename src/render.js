@@ -8,6 +8,7 @@ import { getLegacyPhase } from './signals.js';
 import { BUILDING_DEFS } from './economy.js';
 import { UI_TOKENS, alpha } from './uiTokens.js';
 import { trafficOverlay, ACCESS_STATE } from './layers.js';
+import { laneMarkings, trimPolyline, offsetPolyline } from './render/markings.js';
 
 const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
 const TERRAIN_RES = 1024;    // offscreen resolution
@@ -47,6 +48,7 @@ const PALETTE = {
   forestDark: '#647f4d',
   road: '#ffffff',
   roadOutline: '#b9b6ac',
+  laneDash: '#d8d5ca',
   centerline: '#f2cf4e',
   highwayOutline: '#2e2e2e',
   island: '#dcd7c6',
@@ -297,63 +299,61 @@ export class Renderer {
     ctx.strokeStyle = PALETTE.road;
     ctx.stroke();
 
-    // trim markings back from both ends so they never cross junction mouths
-    const trim = cls.width * 0.75 + 3;
+    // Marking geometry comes from src/render/markings.js: the divider offsets,
+    // the trim that keeps them out of junction mouths, and the zoom gate that
+    // hides dashes rather than painting sub-pixel hairlines.
+    const length = edge.cum[edge.cum.length - 1];
+    const marks = laneMarkings(edge, zoom, length);
 
     // Lane divider dashes, positioned by the same lane-centre model that places
     // vehicles, so a dash always sits exactly between two lanes.
-    if (cls.forward + cls.backward > 2 && cls.medianWidth > 0) {
-      for (let i = 1; i < cls.forward; i++) {
-        const off = cls.medianWidth / 2 + i * cls.laneWidth;
+    if (marks.showDashes && marks.dividerOffsets.length) {
+      const span = trimPolyline(pts, edge.cum, marks.trim);
+      ctx.strokeStyle = PALETTE.laneDash;
+      ctx.lineWidth = marks.dashWidth;
+      ctx.setLineDash(marks.dash);
+      for (const off of marks.dividerOffsets) {
         for (const sgn of [1, -1]) {
-          this._pathOffsetPolyline(ctx, pts, off * sgn, zoom);
-          ctx.lineWidth = 1.1 * zoom;
-          ctx.setLineDash([6 * zoom, 6 * zoom]);
-          ctx.strokeStyle = '#d8d5ca';
-          ctx.stroke();
-          ctx.setLineDash([]);
+          this._strokeWorldPolyline(ctx, offsetPolyline(span, off * sgn), zoom);
         }
       }
-    } else if (cls.forward + cls.backward === 2 && cls.medianWidth > 0) {
-      // two-lane two-way road: the median IS the centreline, drawn below
+      ctx.setLineDash([]);
     }
 
-    // yellow centreline (solid, Trafficity-style), trimmed at junction mouths.
-    // Omitted on one-way roads, which have no centre division.
-    if (cls.medianWidth > 0) {
-      this._pathPolylineTrimmed(ctx, pts, edge.cum, trim, zoom);
-      ctx.lineWidth = 1.2 * zoom;
+    // Yellow centreline, trimmed at junction mouths. Omitted where there is no
+    // median to divide, which includes every one-way and ring edge.
+    if (marks.showCentreline) {
+      ctx.lineWidth = marks.centrelineWidth;
       ctx.strokeStyle = PALETTE.centerline;
-      ctx.stroke();
+      this._strokeWorldPolyline(ctx, trimPolyline(pts, edge.cum, marks.trim), zoom);
     }
   }
 
-  _pathPolylineTrimmed(ctx, pts, cum, trim, zoom) {
+  /**
+   * Strokes a polyline given in WORLD coordinates.
+   *
+   * Trimming and offsetting happen in world space (src/render/markings.js) so a
+   * lane keeps a constant lateral distance from the centreline through bends and
+   * the ends are cut at an exact distance rather than snapped to vertices.
+   */
+  _strokeWorldPolyline(ctx, pts, zoom) {
+    if (!Array.isArray(pts) || pts.length < 2) return;
     ctx.beginPath();
-    const total = cum[cum.length - 1];
-    const endTrim = total - trim;
-    let started = false;
     for (let k = 0; k < pts.length; k++) {
-      const s = cum[k];
-      if (s < trim || s > endTrim) continue;
       const [x, y] = this.worldToScreen(pts[k][0], pts[k][1]);
-      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
+    ctx.stroke();
   }
 
-  _pathOffsetPolyline(ctx, pts, off, zoom) {
-    ctx.beginPath();
-    for (let k = 0; k < pts.length; k++) {
-      const p = pts[k];
-      const pd = (k < pts.length - 1)
-        ? Math.atan2(pts[k + 1][1] - p[1], pts[k + 1][0] - p[0])
-        : Math.atan2(p[1] - pts[k - 1][1], p[0] - pts[k - 1][0]);
-      const nx = Math.sin(pd) * off, ny = -Math.cos(pd) * off;
-      const [sx, sy] = this.worldToScreen(p[0] + nx, p[1] + ny);
-      if (k === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-    }
-  }
-
+  /**
+   * Offset polyline restricted to the trimmed span, so a lane dash can never be
+   * painted past the pavement end into a junction mouth.
+   */
+  /**
+   * Offset polyline restricted to the trimmed span, so a lane dash can never be
+   * painted past the pavement end into a junction mouth.
+   */
   // Roundabout ring components -> one grass island each (cached per version)
   _islandData(net) {
     if (this._islandVersion === net.version && this._islands) return this._islands;

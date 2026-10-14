@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.2b",
+  "nextTask": "S02.3b",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -848,7 +848,7 @@
     },
     {
       "id": "S02.2b",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.2a"
       ],
@@ -896,6 +896,11 @@
           "exitCode": 1,
           "result": "REAL BUG FOUND AND FIXED after the task was first reported. The test mutes, saves, unmutes, then loads the save. Before the fix it failed with: \"the sound control must show the loaded state, not the state it had before the load - 'true' !== 'false'\". The load DID apply the saved preference (world.settings.audio was false, asserted separately) but the button still reported aria-pressed=true and 'Sound on'. Cause: replaceWorld called setAudioEnabled() on the audio module directly, while the button was only ever refreshed by initMenu's own click handler, so a load or import left the control and the world disagreeing. Speed did not have this problem because setSpeed already routed through menu.applySpeed. Fixed by adding a single applyAudio(enabled) used by both the sound click handler and replaceWorld, so the module and the control are updated together. Passes after the fix.",
           "artifact": null
+        },
+        {
+          "command": "operator approval and post-fix re-verification",
+          "exitCode": 0,
+          "result": "APPROVED, and the sound-control defect reported after the first handoff was fixed and merged separately (commit 18f34f7, merge 63f179e). Re-verified after the fix: npm test 285/285, npm run test:browser 47/47, soak 10 trips. The 5 new reachability-of-bands unit tests are included in that count."
         }
       ],
       "notes": [
@@ -908,18 +913,76 @@
         "Export downloads a real file through a Blob URL rather than writing silently to storage. Import is failure-isolated: the browser test asserts the full world state is byte-identical after both a malformed file and a structurally-valid-but-semantically-wrong snapshot, and that the player is told the city was not touched.",
         "Deferred to S02.3: the traffic overlay's own visual refinement (junction mouth trim, junction fill polygons) is rendering work, not layer work. Deliberately NOT added: a Noise layer (no data, S06.3), and any Pollution layer (see above).",
         "STATUS: implementation and every check in the task's Verify line pass, including the full browser interaction matrix the task asked for. Held at in_progress for the operator review checkpoint, consistent with S02.1 and S02.2a.",
-        "POST-REPORT FIX: the sound control diverged from the loaded world state (see the final evidence entry). This is the same class of defect S02.2 item 2 exists to prevent - one value owned by two places. Also added 5 unit tests in test/layers.test.js proving the upper traffic bands are reachable from real simulation rather than only from hand-written values: a standstill reaches the top band, every declared band is reachable across 0..1, the jammed threshold is inside what the sim produces, a jammed edge carries a vehicle count, and a clearing jam passes back down through every band. Verified with a real TrafficSim driven to a standstill, not by writing _congestion by hand."
+        "POST-REPORT FIX: the sound control diverged from the loaded world state (see the final evidence entry). This is the same class of defect S02.2 item 2 exists to prevent - one value owned by two places. Also added 5 unit tests in test/layers.test.js proving the upper traffic bands are reachable from real simulation rather than only from hand-written values: a standstill reaches the top band, every declared band is reachable across 0..1, the jammed threshold is inside what the sim produces, a jammed edge carries a vehicle count, and a clearing jam passes back down through every band. Verified with a real TrafficSim driven to a standstill, not by writing _congestion by hand.",
+        "CLOSED. The sound-control divergence found after the first report is fixed and covered by a regression test (mute, save, unmute, load, then assert both the world setting and the control)."
+      ]
+    },
+    {
+      "id": "S02.3a",
+      "status": "in_progress",
+      "dependsOn": [
+        "S02.2b"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/renderMarkings.test.js (red, before trimPolyline existed)",
+          "exitCode": 1,
+          "result": "RED in two stages. First the module did not export offsetPolyline at all: 'SyntaxError: The requested module ../src/render/markings.js does not provide an export named offsetPolyline'. Then, with the helpers added, 'a road too short to trim is refused rather than drawn inverted' failed because my own expectation was wrong: clampTrim deliberately keeps a short edge drawable rather than dropping its marking, so the invariant is ordering (never inverted), not emptiness. The test was corrected to assert ordering, containment and positive length; the code was right."
+        },
+        {
+          "command": "pixel probe of a straight avenue before and after the trim fix",
+          "exitCode": 0,
+          "result": "Before: sampling vertically across the road at its midpoint returned rgb(255,255,255) for every row from 407 to 431 - the avenue had NO centreline. Cause: _pathPolylineTrimmed only kept existing vertices inside the trim, and on a straight two-point road (cum = [0, 450]) both endpoints are outside the range, so nothing was stroked. It only ever worked on multi-point roads. After: rgb(248,231,166) at rows 419-420, the yellow centreline, with white pavement either side. This is the DESIGN section 3 rule 'paint lanes continuously through normal segments, trim at junction mouths'."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 309, pass 309, fail 0. Was 285 before this task; +24 from test/renderMarkings.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 48, pass 48, fail 0. Was 47; +1 zoom sweep capturing the markings at 0.25, 1 and 3."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. Marking changes are draw-only and did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s023a.mjs (10 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "10 of 10 caught, after two ineffective mutations were investigated and the underlying issue fixed. A trim reverts to vertex-filtering (the original bug) -> 4 failures. B dash gate removed -> 2. C dash gate raised above normal play -> 1. D divider offsets ignore the median -> 1. F trim not clamped on a short edge -> 3. G centreline drawn on one-way roads -> 1. H first divider sits on the median -> 1. I lane offsetting ignores segment direction -> 2. J zero-length segment unguarded -> 1. L mismatched cum array misread -> 1. Two further mutations were INEFFECTIVE and were handled by proof rather than by pretending: deleting 'if (dim.forward + dim.backward <= 2) return []' and deleting pointAtArc's 's >= total' early return BOTH left all 24 tests passing, proving those branches are redundant by construction. The first was deleted and replaced with a comment explaining that the loop bound already expresses it; the second was kept as an explicit statement of the clamp contract and is documented as such. The two mutations were then removed from the harness rather than counted."
+        },
+        {
+          "command": "capture pass, zoom 0.25 / 1 / 3 (RF_RUN_ID=after-s02.3a)",
+          "exitCode": 0,
+          "result": "Inspected all three. At zoom 1 and 3 an avenue shows a continuous yellow centreline with dashed interior lane dividers, and the T-junction mouth is clear: the markings stop short of the junction and resume on the far side. At zoom 0.25 the roads are clean white ribbons with NO dashes and no speckle, which is the DESIGN rule 'at low zoom hide dashes rather than painting noisy hairlines'.",
+          "artifact": "artifacts/after-s02.3a"
+        }
+      ],
+      "notes": [
+        "Created src/render/markings.js (marking geometry: zoom gate, divider offsets, trim, polyline trimming with interpolation, lane offsetting), test/renderMarkings.test.js (24 tests), scripts/mutate-s023a.mjs. Modified src/render.js (_drawEdgeFill now consumes laneMarkings/trimPolyline/offsetPolyline through a new _strokeWorldPolyline; _pathPolylineTrimmed and _pathOffsetPolylineTrimmed deleted as dead), test/browser/ui.js (+1 zoom sweep).",
+        "REAL DEFECT FIXED, not introduced by this task. `_pathPolylineTrimmed` filtered existing vertices instead of interpolating, so any straight two-point road drew NO centreline. It survived because every screenshot so far happened to show curved or multi-point roads, and because no test asserted that a marking is drawn at all. The replacement cuts the ends at an exact arc distance, which is what DESIGN section 3 asks for.",
+        "The low-zoom dash gate is new. Previously the dash pattern was `6 * zoom`, so at the minimum camera zoom (0.12) a dash was 0.72px and roads dissolved into speckle. DASH_MIN_ZOOM is 0.35: above the zoom range that speckles, below normal play, and asserted to still produce a visible mark (>= 0.35px wide, >= 1.5px long).",
+        "Marking decisions are pure functions of roadDimensions and zoom, so they are tested numerically without a canvas. The renderer only decides how to stroke them, and test/renderMarkings.test.js asserts that laneMarkings reports exactly the offsets laneDividerOffsets computes rather than re-deriving them.",
+        "Two guards were PROVEN redundant rather than assumed: deleting each left all 24 tests green. One was deleted with a comment; the other was kept as a documented contract statement. Both mutations were removed from the harness, so the honest tally is 10 caught out of 10 run, not 10 out of 12.",
+        "Deliberately deferred to S02.3b: junction mouth trim derived from connected edge widths and tangent directions (S02.3a keeps the conservative width-only trim), conservative junction fill polygons, the single shadow direction, further render-pass separation, and the 12-scene contact sheet. Junction visual geometry is a separate, coupled change and does not belong in the same diff as the marking fix.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
       ]
     },
     {
       "id": "S02.3",
       "status": "pending",
       "dependsOn": [
-        "S02.2"
+        "S02.3a"
       ],
       "file": "stages/02-experience.md",
       "evidence": [],
-      "notes": []
+      "notes": [
+        "Split by AMEND-S02.3-split. This task is now the REMAINING half and must not start until S02.3a is done: junction mouth trim derived from the connected edges' widths and tangent directions, conservative junction fill polygons instead of a circular disk over every junction, the single shadow direction, the remaining render-pass separation, and the 12-scene contact sheet (3 road classes, T/X/Y/acute junction, roundabout, dense grid, curved road, car queue, invalid road draft). S02.3a already fixed the continuous-marking defect and added the low-zoom dash gate."
+      ]
     },
     {
       "id": "S02.4",
@@ -1303,6 +1366,21 @@
       ],
       "newTests": "test/layers.test.js gains 'no pollution or noise layer exists, because no such field is simulated' and 'every declared layer names a real simulated data source'. test/browser/ui.js gains the same guard at the renderer surface, asserting `_drawPollution` is undefined and `showPollution` is absent.",
       "operatorDecision": "Operator chose 'Traffic + Access only; delete the fake overlay' when offered the alternatives of leaving the fabricated code dead in the tree or building a real pollution model now. No requirement was removed: the Pollution and Noise layers move to S06.3, the task that owns the data they need."
+    },
+    {
+      "id": "AMEND-S02.3-split",
+      "date": "S02.3",
+      "oldAssumption": "S02.3 was one task: five coupled renderer geometry changes (separate casing/fill/marking passes, junction mouth trim from connected widths and tangents, junction fill polygons, zoom-dependent marking behaviour, single shadow direction) plus a 12-scene contact sheet.",
+      "evidence": "The marking rules alone violated two explicit DESIGN section 3 rules and exposed a third defect that had never been noticed: `_pathPolylineTrimmed` kept only EXISTING vertices inside the trim, so on a straight two-point road both endpoints fell outside the range and NOTHING was stroked. A pixel probe of a straight avenue returned pure white across its whole width, i.e. no centreline at all. Fixing that needed its own module, its own numeric tests and its own visual verification. Junction mouth trim from connected widths and tangents, and junction fill polygons, are further independent geometry work.",
+      "newContract": "Split into S02.3a and S02.3b. S02.3a (this task): lane marking geometry extracted to src/render/markings.js with the continuous-trim fix, the low-zoom dash gate, and pavement containment; the renderer consumes it and the dead helper is deleted. S02.3b: junction mouth trim derived from connected edge widths and tangent directions, conservative junction fill polygons, the single shadow direction, the remaining render-pass separation, and the 12-scene contact sheet. S02.3b depends on S02.3a.",
+      "affectedIds": [
+        "S02.3",
+        "S02.3a",
+        "S02.3b",
+        "S02.4"
+      ],
+      "newTests": "test/renderMarkings.test.js (24 tests) covers the zoom gate, divider offsets and pavement containment, centreline visibility, trim growth and clamping, polyline trimming with interpolation, lane offsetting perpendicularity, and degenerate input. test/browser/ui.js gains a zoom sweep at 0.25 / 1 / 3 that captures the markings.",
+      "operatorDecision": "No new decision was requested: the operator had already chosen the equivalent split for S02.2 and instructed work to continue, and this split removes no requirement. Every original S02.3 item is assigned to a or b."
     }
   ],
   "review": {
