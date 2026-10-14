@@ -37,19 +37,16 @@ export const ICONS = {
   save: '<path d="M12 3.5v10"/><path d="M8 9.5l4 4 4-4"/><path d="M4.5 16v4h15v-4"/>',
   load: '<path d="M12 13.5v-10"/><path d="M8 7.5l4-4 4 4"/><path d="M4.5 16v4h15v-4"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   help: '<circle cx="12" cy="12" r="8.5"/>'
     + '<path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.7-.9 1.3v.7"/><path d="M12 17v.01"/>',
-  pause: '<path d="M9.5 5.5v13M14.5 5.5v13"/>',
-  play1: '<path d="M8 5.5L19 12L8 18.5z"/>',
-  play2: '<path d="M4.5 6.5L12.5 12L4.5 17.5z"/><path d="M11.5 6.5L19.5 12L11.5 17.5z"/>',
-  play3: '<path d="M2.5 7L8 12L2.5 17z"/><path d="M9 7L14.5 12L9 17z"/><path d="M15.5 7L21 12L15.5 17z"/>',
 };
 
 /** Ids the current UI must render (DESIGN §2), asserted by test/browser/ui.js. */
 export const REQUIRED_ICON_IDS = [
   'select', 'road', 'avenue', 'highway', 'roundabout', 'light',
   'house', 'shop', 'factory', 'bulldoze', 'save', 'load',
-  'close', 'help', 'pause', 'play1', 'play2', 'play3',
+  'close', 'help', 'menu',
 ];
 
 /**

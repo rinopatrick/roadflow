@@ -15,6 +15,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   startServer, launchGame, runDir, dismissHelp,
+  openCategory, selectTool, toolCategories, worldState,
 } from './harness.js';
 import { ICONS, icon, REQUIRED_ICON_IDS } from '../../src/icons.js';
 import { UI_TOKENS } from '../../src/uiTokens.js';
@@ -37,6 +38,25 @@ const VIEWPORTS = [
   { name: 'desktop', width: 1440, height: 900 },
   { name: 'compact', width: 1024, height: 768 },
 ];
+
+// DESIGN section 1: five main categories, in this order.
+const EXPECTED_CATEGORIES = ['select', 'roads', 'junctions', 'buildings', 'demolish'];
+
+// DESIGN section 1: speed labels are Pause / 1x / 3x / 8x, never indistinguishable glyphs.
+const SPEED_LABELS = { 0: 'Pause', 1: '1\u00d7', 3: '3\u00d7', 8: '8\u00d7' };
+
+// Shortcuts 1-0 stay bound to the ten original tools in declaration order.
+const SHORTCUTS = Object.fromEntries(EXPECTED_TOOLS.map((t, i) => [t, String((i + 1) % 10)]));
+
+// DESIGN section 1 layout contract, in CSS pixels.
+const LAYOUT = {
+  bandHeight: 56,
+  safeMargin: 16,
+  dockHeight: 64,
+  dockMaxWidth: 760,
+  inspectorWidth: 296,
+  compactBreakpoint: 1100,
+};
 
 // ---------- colour maths (measured, never inferred from the hex choice) ----------
 
@@ -106,18 +126,31 @@ let game;
 let shots;
 
 /**
- * Moves focus to the Nth toolbar button using the keyboard only.
- *
- * `blur()` alone is not enough: Chromium keeps the sequential focus navigation
- * starting point where it was, so Tab would resume mid-dock. Focusing a
- * tabindex=-1 body resets the starting point to the top of the document.
+ * Tabs forward from the top of the document until the given tool has keyboard
+ * focus, so the assertion also proves the tool is keyboard-reachable.
  */
-async function tabToTool(page, index) {
+async function tabUntilTool(page, tool, maxTabs = 30) {
   await page.evaluate(() => {
     document.body.tabIndex = -1;
     document.body.focus();
   });
-  for (let n = 0; n <= index; n++) await page.keyboard.press('Tab');
+  for (let i = 0; i < maxTabs; i++) {
+    await page.keyboard.press('Tab');
+    const current = await page.evaluate(() => document.activeElement?.dataset?.tool ?? null);
+    if (current === tool) return true;
+  }
+  return false;
+}
+
+/** Groups the ten tools by their owning category, in declaration order. */
+function groupByCategory(cats) {
+  const groups = new Map();
+  for (const tool of EXPECTED_TOOLS) {
+    const category = cats[tool];
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(tool);
+  }
+  return groups;
 }
 
 before(async () => {
@@ -244,7 +277,7 @@ test('ui: the icon map covers every control S02.1 renders', () => {
 
 test('ui: no control depends on emoji', async () => {
   const { page } = game;
-  const zones = ['#toolbar', '#menu', '#speedctl', '#hud', '#inspect', '#help'];
+  const zones = ['#topband', '#toolbar', '#speedctl', '#menupop', '#inspect', '#help'];
   for (const zone of zones) {
     const html = await page.$eval(zone, el => el.outerHTML);
     assert.ok(!EMOJI.test(html), `${zone} still contains emoji: ${html.match(EMOJI)?.[0]}`);
@@ -318,42 +351,51 @@ test('ui: tool buttons keep visible text, data-tool and real inventory badges', 
   assert.equal(activeStyle.pressed, 'true', 'the active tool must report aria-pressed');
 });
 
-test('ui: speed controls keep their values and an accessible name', async () => {
+test('ui: speed controls are labelled Pause, 1x, 3x and 8x', async () => {
   const { page } = game;
   const speeds = await page.$$eval('[data-speed]', els => els.map(e => e.dataset.speed));
   assert.deepEqual(speeds, EXPECTED_SPEEDS, `speed controls were: ${speeds.join(', ')}`);
 
-  const names = await page.$$eval('[data-speed]', els => els.map(e => ({
+  const labels = await page.$$eval('[data-speed]', els => els.map(e => ({
     speed: e.dataset.speed,
+    text: e.textContent.trim(),
     name: (e.getAttribute('aria-label') || '').trim(),
-    hasIcon: !!e.querySelector('svg[aria-hidden="true"]'),
+    visible: e.getBoundingClientRect().width > 0,
   })));
-  for (const s of names) {
-    assert.ok(s.hasIcon, `speed ${s.speed}: renders an inline svg icon`);
-    assert.ok(s.name.length > 0, `speed ${s.speed}: needs a non-emoji accessible name`);
+  for (const s of labels) {
+    assert.ok(s.visible, `speed ${s.speed}: must be visible`);
+    assert.equal(s.text, SPEED_LABELS[s.speed],
+      `speed ${s.speed}: visible label must read "${SPEED_LABELS[s.speed]}", got "${s.text}"`);
+    assert.ok(s.name.length > 0, `speed ${s.speed}: needs an accessible name`);
   }
+  // The four controls must be distinguishable without colour or shape guessing.
+  assert.equal(new Set(labels.map(s => s.text)).size, 4,
+    `speed labels must be distinct, got: ${labels.map(s => s.text).join(', ')}`);
 });
 
 test('ui: keyboard focus is visible on every tool', async () => {
   const { page } = game;
+  const groups = groupByCategory(await toolCategories(page));
 
-  for (let i = 0; i < EXPECTED_TOOLS.length; i++) {
-    await tabToTool(page, i);
-    const state = await page.evaluate(() => {
-      const el = document.activeElement;
-      const cs = getComputedStyle(el);
-      return {
-        tool: el?.dataset?.tool ?? null,
-        focusVisible: el?.matches?.(':focus-visible') ?? false,
-        outlineWidth: cs.outlineWidth,
-        outlineColor: cs.outlineColor,
-        outlineOffset: cs.outlineOffset,
-      };
-    });
-    assert.equal(state.tool, EXPECTED_TOOLS[i], `Tab order should reach ${EXPECTED_TOOLS[i]}`);
-    assert.ok(state.focusVisible, `${state.tool}: keyboard focus must match :focus-visible`);
-    assert.equal(state.outlineWidth, '2px', `${state.tool}: focus ring must be 2px, got ${state.outlineWidth}`);
-    assert.equal(state.outlineOffset, '2px', `${state.tool}: focus ring needs a 2px offset`);
+  for (const [category, tools] of groups) {
+    await openCategory(page, category);
+    for (const tool of tools) {
+      assert.ok(await tabUntilTool(page, tool), `${tool}: must be reachable by Tab once ${category} is open`);
+      const state = await page.evaluate(() => {
+        const el = document.activeElement;
+        const cs = getComputedStyle(el);
+        return {
+          tool: el?.dataset?.tool ?? null,
+          focusVisible: el?.matches?.(':focus-visible') ?? false,
+          outlineWidth: cs.outlineWidth,
+          outlineOffset: cs.outlineOffset,
+        };
+      });
+      assert.equal(state.tool, tool, `Tab must land on ${tool}`);
+      assert.ok(state.focusVisible, `${tool}: keyboard focus must match :focus-visible`);
+      assert.equal(state.outlineWidth, '2px', `${tool}: focus ring must be 2px, got ${state.outlineWidth}`);
+      assert.equal(state.outlineOffset, '2px', `${tool}: focus ring needs a 2px offset`);
+    }
   }
 
   // A mouse click must not leave the ring behind on an unfocused control.
@@ -403,7 +445,7 @@ test('ui: depleted inventory stays legible and reported', async () => {
   assert.equal(state.label, 'House', 'the visible label survives depletion');
 
   // Still selectable, so the canvas can explain why it cannot be placed.
-  await page.click('[data-tool="house"]');
+  await selectTool(page, 'house');
   const active = await page.evaluate(() => document.querySelector('[data-tool="house"]').classList.contains('active'));
   assert.ok(active, 'a depleted tool stays selectable so the reason can be shown');
 
@@ -478,10 +520,244 @@ test('ui: the inspector title carries an icon and text, not a glyph', async () =
     assert.ok(!EMOJI.test(title.body), `inspector body must not contain emoji: ${title.body}`);
 
     await p.screenshot({ path: `${shots}/ui-inspector-desktop-1440x900-seed1.png` });
+
+    // Layout contract: 296px wide, hung below the top band, never covering the
+    // dock, and internally scrollable.
+    const metrics = await p.evaluate(() => {
+      const el = document.getElementById('inspect');
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      const band = document.getElementById('topband').getBoundingClientRect();
+      const dock = document.getElementById('toolbar').getBoundingClientRect();
+      return {
+        width: r.width, top: r.top, bottom: r.bottom, right: r.right,
+        overflowY: cs.overflowY, maxHeight: cs.maxHeight,
+        bandBottom: band.bottom, dockTop: dock.top, vw: window.innerWidth,
+      };
+    });
+    assert.equal(Math.round(metrics.width), LAYOUT.inspectorWidth,
+      `inspector must be ${LAYOUT.inspectorWidth}px wide, measured ${metrics.width}`);
+    assert.ok(metrics.top >= metrics.bandBottom,
+      `inspector hangs below the band (${metrics.top} vs band bottom ${metrics.bandBottom})`);
+    assert.ok(metrics.bottom <= metrics.dockTop + 1,
+      `inspector must not cover the dock (${metrics.bottom} vs dock top ${metrics.dockTop})`);
+    assert.equal(metrics.overflowY, 'auto', 'the inspector must scroll internally');
+    assert.match(metrics.maxHeight, /px$/, `inspector height must be bounded, got ${metrics.maxHeight}`);
+
+    // Compact desktop: still fully on screen, still clear of the dock.
+    await p.setViewportSize({ width: 1024, height: 768 });
+    await p.waitForTimeout(200);
+    const compact = await p.evaluate(() => {
+      const r = document.getElementById('inspect').getBoundingClientRect();
+      const dock = document.getElementById('toolbar').getBoundingClientRect();
+      return { left: r.left, right: r.right, bottom: r.bottom, dockTop: dock.top, vw: window.innerWidth };
+    });
+    assert.ok(compact.left >= 0 && compact.right <= compact.vw + 1,
+      `compact inspector must stay on screen (${compact.left}..${compact.right} of ${compact.vw})`);
+    assert.ok(compact.bottom <= compact.dockTop + 1,
+      `compact inspector must not cover the dock (${compact.bottom} vs ${compact.dockTop})`);
+    await p.screenshot({ path: `${shots}/ui-inspector-compact-1024x768-seed1.png` });
+
     assert.deepEqual(run.errors.filter(e => !/favicon/.test(e)), [], 'no console errors while inspecting');
   } finally {
     await run.close();
   }
+});
+
+// ---------- S02.2a: dock structure, controller state and layout ----------
+
+test('ui: the dock groups tools into categories with one open at a time', async () => {
+  const { page } = game;
+  const categories = await page.$$eval('[data-category]', els => els.map(e => e.dataset.category));
+  assert.deepEqual(categories, EXPECTED_CATEGORIES, `dock categories were: ${categories.join(', ')}`);
+
+  // All ten tools stay in the DOM in shortcut order, so data-tool and the 1-0
+  // shortcuts keep working even though only one category is visible.
+  const tools = await page.$$eval('[data-tool]', els => els.map(e => e.dataset.tool));
+  assert.deepEqual(tools, EXPECTED_TOOLS, `tools were: ${tools.join(', ')}`);
+
+  const cats = await toolCategories(page);
+  for (const tool of EXPECTED_TOOLS) {
+    assert.ok(EXPECTED_CATEGORIES.includes(cats[tool]),
+      `${tool} must belong to a declared category, got ${cats[tool]}`);
+  }
+
+  const state = await page.evaluate((expected) => ({
+    expanded: expected.filter(c =>
+      document.querySelector(`[data-category="${c}"]`).getAttribute('aria-expanded') === 'true'),
+    visibleTools: [...document.querySelectorAll('[data-tool]')]
+      .filter(e => e.getBoundingClientRect().width > 0)
+      .map(e => e.dataset.tool),
+  }), EXPECTED_CATEGORIES);
+
+  assert.equal(state.expanded.length, 1,
+    `exactly one category may be open, open: ${state.expanded.join(', ') || 'none'}`);
+  const expectedVisible = EXPECTED_TOOLS.filter(t => cats[t] === state.expanded[0]);
+  assert.deepEqual(state.visibleTools, expectedVisible,
+    `category ${state.expanded[0]} must show exactly its own tools`);
+});
+
+test('ui: a tool shortcut opens the category that owns it', async () => {
+  const { page } = game;
+  // One tool per category, so every category is reached the way a player reaches it.
+  for (const tool of ['road', 'light', 'shop', 'bulldoze', 'select']) {
+    await page.keyboard.press(SHORTCUTS[tool]);
+    const state = await page.evaluate((t) => {
+      const btn = document.querySelector(`[data-tool="${t}"]`);
+      return {
+        pressed: btn.getAttribute('aria-pressed'),
+        visible: btn.getBoundingClientRect().width > 0,
+        expanded: document.querySelector(`[data-category="${btn.dataset.toolCategory}"]`).getAttribute('aria-expanded'),
+      };
+    }, tool);
+    assert.equal(state.pressed, 'true', `${tool}: shortcut ${SHORTCUTS[tool]} must select the tool`);
+    assert.equal(state.visible, true, `${tool}: shortcut must reveal its category`);
+    assert.equal(state.expanded, 'true', `${tool}: owning category must be expanded`);
+  }
+});
+
+test('ui: the interface has a single owner for the active tool', async () => {
+  const { page } = game;
+  const fields = await page.evaluate(() => Object.keys(window.__rf.ui.snapshot()).sort());
+  assert.deepEqual(fields,
+    ['activeTool', 'dialog', 'openCategory', 'openPanel', 'overlay'].sort(),
+    `controller state must hold exactly the DESIGN fields, got ${fields.join(', ')}`);
+
+  await selectTool(page, 'shop');
+  const agreement = await page.evaluate(() => ({
+    controller: window.__rf.ui.snapshot().activeTool,
+    openCategory: window.__rf.ui.snapshot().openCategory,
+    pressed: [...document.querySelectorAll('[data-tool][aria-pressed="true"]')].map(e => e.dataset.tool),
+    canvasClass: document.getElementById('game').className,
+  }));
+  assert.equal(agreement.controller, 'shop', 'the controller must own the active tool');
+  assert.equal(agreement.openCategory, 'buildings', 'the owning category must follow the tool');
+  assert.deepEqual(agreement.pressed, ['shop'],
+    `exactly one tool may be pressed, got ${agreement.pressed.join(', ') || 'none'}`);
+  assert.match(agreement.canvasClass, /tool-shop/,
+    `the canvas class must follow the controller, got "${agreement.canvasClass}"`);
+});
+
+test('ui: the controller refuses unknown state keys', async () => {
+  const { page } = game;
+  const message = await page.evaluate(() => {
+    try { window.__rf.ui.set({ activeTol: 'road' }); } catch (err) { return err.message; }
+    return null;
+  });
+  assert.ok(message, 'a misspelled state key must throw rather than silently add a field');
+  assert.match(message, /activeTol/, `the error must name the offending key, got: ${message}`);
+});
+
+test('ui: the top band and dock match the layout contract', async () => {
+  const { page } = game;
+  const m = await page.evaluate(() => {
+    const box = id => {
+      const el = document.getElementById(id);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height };
+    };
+    return {
+      band: box('topband'), categories: box('categories'), dock: box('toolbar'),
+      vw: window.innerWidth, vh: window.innerHeight,
+    };
+  });
+
+  assert.ok(m.band, 'the top status band must exist as one grouped surface');
+  assert.equal(Math.round(m.band.height), LAYOUT.bandHeight,
+    `top band must be ${LAYOUT.bandHeight}px tall, measured ${m.band.height}`);
+  assert.equal(Math.round(m.band.top), LAYOUT.safeMargin,
+    `top band needs a ${LAYOUT.safeMargin}px exterior gap, got ${m.band.top}`);
+  assert.ok(m.band.width <= m.vw - LAYOUT.safeMargin * 2 + 1,
+    `top band must respect the exterior gap (${m.band.width} of ${m.vw})`);
+
+  assert.equal(Math.round(m.categories.height), LAYOUT.dockHeight,
+    `the dock must be ${LAYOUT.dockHeight}px tall, measured ${m.categories.height}`);
+  assert.ok(m.dock.width <= LAYOUT.dockMaxWidth + 1,
+    `dock must not exceed ${LAYOUT.dockMaxWidth}px, measured ${m.dock.width}`);
+  assert.equal(Math.round(m.vh - m.dock.bottom), LAYOUT.safeMargin,
+    `dock needs a ${LAYOUT.safeMargin}px safe margin, got ${m.vh - m.dock.bottom}`);
+  assert.ok(m.dock.bottom <= m.vh + 1, 'the dock must stay above the fold');
+});
+
+test('ui: the menu popover holds the file actions', async () => {
+  const { page } = game;
+  const closed = await page.evaluate(() => ({
+    panel: window.__rf.ui.snapshot().openPanel,
+    hidden: document.getElementById('menupop').offsetParent === null,
+  }));
+  assert.equal(closed.panel, null, 'no panel may be open on boot');
+  assert.ok(closed.hidden, 'the menu popover must start closed');
+
+  await page.click('#menubtn');
+  const open = await page.evaluate(() => ({
+    panel: window.__rf.ui.snapshot().openPanel,
+    visible: document.getElementById('menupop').offsetParent !== null,
+    present: ['btnSave', 'btnLoad', 'btnNew', 'btnHelp'].map(id => !!document.getElementById(id)),
+    expanded: document.getElementById('menubtn').getAttribute('aria-expanded'),
+  }));
+  assert.equal(open.panel, 'menu', 'opening the menu must be recorded in the controller');
+  assert.ok(open.visible, 'the popover must be visible');
+  assert.deepEqual(open.present, [true, true, true, true], 'the file actions must live in the popover');
+  assert.equal(open.expanded, 'true', 'the menu button must report aria-expanded');
+
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.__rf.ui.snapshot().openPanel === null, null, { timeout: 5000 });
+  assert.ok(await page.evaluate(() => document.getElementById('menupop').offsetParent === null),
+    'Escape must close the menu');
+});
+
+test('ui: New map confirms only when the city is dirty', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+
+    // A fresh city holds nothing to lose, so the control must not nag.
+    await page.click('#menubtn');
+    await page.click('#btnNew');
+    await page.waitForTimeout(300);
+    assert.deepEqual(run.dialogs, [],
+      `a clean city must not prompt, got: ${run.dialogs.join(' | ')}`);
+
+    // Build something, and the same control must ask before discarding it.
+    await page.keyboard.press('1');
+    await page.mouse.click(500, 400);
+    await page.mouse.click(760, 400);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    await page.click('#menubtn');
+    await page.click('#btnNew');
+    await page.waitForTimeout(300);
+    assert.equal(run.dialogs.length, 1,
+      `a dirty city must prompt before clearing, got ${run.dialogs.length} dialog(s)`);
+    assert.match(run.dialogs[0], /new map/i, `dialog text was: ${run.dialogs[0]}`);
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: clicking interface chrome never reaches the canvas', async () => {
+  const { page } = game;
+  // The road tool is the dangerous one: a click that falls through to the
+  // canvas would start a road draft behind the panel.
+  await selectTool(page, 'road');
+  const before = await worldState(page);
+
+  for (const selector of ['#topband', '#categories', '#toolbar']) {
+    const box = await page.locator(selector).boundingBox();
+    if (!box) continue;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  const after = await worldState(page);
+  assert.equal(after.edges, before.edges,
+    `interface chrome must not draw roads (${before.edges} -> ${after.edges})`);
+  assert.equal(after.nodes, before.nodes, 'interface chrome must not create nodes');
+  assert.equal(after.pop, before.pop, 'interface chrome must not place buildings');
+  assert.equal(await page.evaluate(() => window.__rf.draftLength), 0,
+    'interface chrome must not start a road draft');
 });
 
 // ---------- captures ----------
@@ -494,6 +770,7 @@ test('ui: captures every tool state at desktop and compact viewports', async () 
       await dismissHelp(page);
       await page.click('[data-speed="0"]'); // frozen clock: captures are comparable
       const tag = `${vp.name}-${vp.width}x${vp.height}-dpr1-seed1`;
+      const groups = groupByCategory(await toolCategories(page));
 
       await page.screenshot({ path: `${shots}/ui-${tag}-full.png` });
 
@@ -511,22 +788,31 @@ test('ui: captures every tool state at desktop and compact viewports', async () 
         return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, scroll: bar.scrollWidth, client: bar.clientWidth };
       });
 
-      for (let i = 0; i < EXPECTED_TOOLS.length; i++) {
-        const tool = EXPECTED_TOOLS[i];
-
-        await page.click(`[data-tool="${tool}"]`);
-        await page.mouse.move(vp.width / 2, 40); // park the pointer off the dock
-        await page.screenshot({ path: `${shots}/ui-${tag}-${tool}-active.png`, clip });
-
-        await page.hover(`[data-tool="${tool}"]`);
-        await page.screenshot({ path: `${shots}/ui-${tag}-${tool}-hover.png`, clip });
-
-        await tabToTool(page, i);
-        const focused = await page.evaluate(() => document.activeElement?.dataset?.tool ?? null);
-        assert.equal(focused, tool, `${vp.name}: Tab must reach ${tool} for its focus capture`);
+      for (const [category, tools] of groups) {
+        await openCategory(page, category);
         await page.mouse.move(vp.width / 2, 40);
-        await page.screenshot({ path: `${shots}/ui-${tag}-${tool}-focus.png`, clip });
+        await page.screenshot({ path: `${shots}/ui-${tag}-category-${category}.png`, clip });
+
+        for (const tool of tools) {
+          await page.click(`[data-tool="${tool}"]`);
+          await page.mouse.move(vp.width / 2, 40); // park the pointer off the dock
+          await page.screenshot({ path: `${shots}/ui-${tag}-${tool}-active.png`, clip });
+
+          await page.hover(`[data-tool="${tool}"]`);
+          await page.screenshot({ path: `${shots}/ui-${tag}-${tool}-hover.png`, clip });
+
+          assert.ok(await tabUntilTool(page, tool),
+            `${vp.name}: Tab must reach ${tool} for its focus capture`);
+          await page.mouse.move(vp.width / 2, 40);
+          await page.screenshot({ path: `${shots}/ui-${tag}-${tool}-focus.png`, clip });
+        }
       }
+
+      // The menu popover belongs to the top band, not the dock, so it needs a
+      // full-page capture to be visible.
+      await page.click('#menubtn');
+      await page.screenshot({ path: `${shots}/ui-${tag}-menu-open.png` });
+      await page.keyboard.press('Escape');
 
       // Geometry is asserted after the captures so a layout failure still
       // leaves the visual evidence in artifacts/.

@@ -14,7 +14,20 @@ import {
 const shots = runDir(process.env.RF_RUN_ID || `soak-${Date.now()}`);
 const soakSeconds = Number(process.env.SOAK_SECONDS ?? 90);
 const SAMPLE_MS = 15000;
-const CX = 640, CY = 430;
+
+// The fixture is expressed in WORLD units and converted through worldToScreen.
+//
+// It used to be raw screen pixels derived from the canvas centre, which made it
+// silently depend on the height of the bottom dock: when S02.2 made the dock
+// taller, the factory click landed on a dock button instead of the map, the
+// factory was never placed, and the soak quietly produced half the trips. It
+// still passed, because nothing asserted the factory existed.
+const FIXTURE = {
+  loop: [[-250, 30], [150, 30], [150, 150], [-250, 150], [-250, 30]],
+  houses: [[-150, -30], [50, -30]],
+  shop: [[250, 120]],
+  factory: [[-150, 190]],
+};
 
 const server = await startServer();
 const game = await launchGame({ baseUrl: server.baseUrl });
@@ -24,27 +37,46 @@ try {
   const { page } = game;
   await dismissHelp(page);
 
+  /**
+   * Clicks a world point through the canvas.
+   *
+   * Refuses to click when the point is covered by interface chrome, so a layout
+   * change can never again turn a fixture click into a no-op that still passes.
+   */
+  async function clickWorld(label, wx, wy) {
+    const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToScreen(x, y), [wx, wy]);
+    const hit = await page.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      return el ? (el.id || el.tagName.toLowerCase()) : 'none';
+    }, [sx, sy]);
+    assert.equal(hit, 'game',
+      `${label}: fixture point ${JSON.stringify([wx, wy])} maps to screen (${Math.round(sx)}, ${Math.round(sy)}), `
+      + `which is covered by "${hit}" instead of the map. Move the fixture point or the panel.`);
+    await page.mouse.click(sx, sy);
+  }
+
   // A closed loop gives cars a real return path.
-  await page.mouse.click(CX - 250, CY);
-  await page.mouse.click(CX + 150, CY);
-  await page.mouse.click(CX + 150, CY + 180);
-  await page.mouse.click(CX - 250, CY + 180);
-  await page.mouse.click(CX - 250, CY);
+  for (let i = 0; i < FIXTURE.loop.length - 1; i++) {
+    await clickWorld(`loop point ${i + 1}`, ...FIXTURE.loop[i]);
+  }
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
 
   await page.keyboard.press('6'); // houses
-  await page.mouse.click(CX - 150, CY - 60);
-  await page.mouse.click(CX + 50, CY - 60);
+  for (const [i, p] of FIXTURE.houses.entries()) await clickWorld(`house ${i + 1}`, ...p);
   await page.keyboard.press('7'); // shop
-  await page.mouse.click(CX + 250, CY + 90);
+  for (const [i, p] of FIXTURE.shop.entries()) await clickWorld(`shop ${i + 1}`, ...p);
   await page.keyboard.press('8'); // factory
-  await page.mouse.click(CX - 150, CY + 240);
+  for (const [i, p] of FIXTURE.factory.entries()) await clickWorld(`factory ${i + 1}`, ...p);
   await page.waitForTimeout(300);
 
   const placed = await worldState(page);
   assert.ok(placed.batch.house < 4, `soak fixture must place houses, batch.house=${placed.batch.house}`);
   assert.ok(placed.batch.shop < 2, `soak fixture must place a shop, batch.shop=${placed.batch.shop}`);
+  // Without the factory the houses have nowhere to work, the trip count halves,
+  // and the soak still passes. Assert the whole fixture, not most of it.
+  assert.ok(placed.batch.factory < 1,
+    `soak fixture must place the factory, batch.factory=${placed.batch.factory} (a covered click would leave this at 1)`);
   assert.ok(placed.edges > 0, `soak fixture must build a loop, edges=${placed.edges}`);
   await page.screenshot({ path: `${shots}/01-built.png` });
 

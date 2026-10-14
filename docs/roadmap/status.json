@@ -791,14 +791,66 @@
       ]
     },
     {
-      "id": "S02.2",
-      "status": "pending",
+      "id": "S02.2a",
+      "status": "in_progress",
       "dependsOn": [
         "S02.1"
       ],
       "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/browser/ui.js (before implementation)",
+          "exitCode": 1,
+          "result": "RED: tests 21, pass 8, fail 13. The new S02.2 guards were observed failing first: \"dock categories were: roads, roads, roads, junctions, ...\" (15 elements carried data-category because I had put it on tool buttons too), \"the controller refuses unknown state keys\", \"a tool shortcut opens the category that owns it\", \"New map confirms only when the city is dirty\", \"the inspector must be 296px wide\", \"speed 3: visible label must read 3x, got a glyph\", and \"the dock must be 64px tall\". Two failures were mine and were fixed before implementing: a bad import path (src/ui.js resolved ./controller.js to src/ instead of src/ui/), which 404'd and stopped the whole app booting, and the duplicate data-category attribute above."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 265, pass 265, fail 0. Unchanged from S02.1: S02.2a changes no simulation module, which confirms the layout restructure did not touch game rules."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 38, pass 38, fail 0. 17 legacy smoke cases plus 21 in test/browser/ui.js. The legacy suite needed one real migration: Save/Load/New map moved behind the menu button, so its 6 direct #btnSave/#btnLoad clicks now go through a menuAction(page, id) harness helper that opens the popover first. No assertion was weakened or removed."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "10 trips, 1% congestion, XP 31.464%. This run FAILED first at 6 trips / XP 20%, reproducibly, on a quiet machine. Root cause found and fixed (see notes): the soak fixture used raw screen pixels and the taller dock covered the factory click, so the factory was never placed. The fixture is now expressed in world units, converted through worldToScreen, and refuses to click a point covered by interface chrome. The guard was verified in the red direction: restoring the old factory point fails with 'fixture point [-150,270] maps to screen (490, 670), which is covered by \"subtools\" instead of the map'."
+        },
+        {
+          "command": "node scripts/mutate-s022a.mjs (10 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "10 of 10 caught, none ineffective. A controller accepts unknown keys -> 1 failure. B tool no longer opens its category -> 1. C closed categories keep tools visible -> 3. D New map always confirms -> 1. E road build does not mark dirty -> 1. F speed labels back to glyphs -> 2. G top band lets clicks through -> 5. H inspector may cover the dock -> 1. I menu button stops reporting aria-expanded -> 1. J hidden tools stay focusable (visibility instead of hidden) -> 3."
+        },
+        {
+          "command": "RF_RUN_ID=after-s02.2a node --test test/browser/ui.js (capture pass)",
+          "exitCode": 0,
+          "result": "Captures at desktop 1440x900 and compact 1024x768, clock frozen at speed 0: full page, each of the five categories open, every tool active/hover/focus, and the menu popover. Inspected: the top band is one grouped surface with the stats inline and the speed group reading Pause / 1x / 3x / 8x; the dock is two rows with the active category tinted and its tools on the contextual row; context help reads 'Road - click to set points, Enter to finish (1)'; the menu popover drops from the top right; nothing is clipped at 1024x768."
+        }
+      ],
+      "notes": [
+        "Created src/ui/controller.js, src/ui/toolbar.js, src/ui/hud.js, src/ui/menu.js, scripts/mutate-s022a.mjs. Rewrote index.html (grouped 56px top band; dock split into a contextual subtool row plus a category row; menu popover; inspector; context-help line). Rewrote src/ui.css around the DESIGN layout contract. Modified src/main.js (the active tool now lives only in the controller and is published to the canvas class from one subscription; the HUD moved to ui/hud.js; the menu handlers moved to ui/menu.js; dirty tracking added), src/ui.js (showPanel owns panel exclusivity through the controller), src/icons.js (pause/play glyphs replaced by a menu icon), test/browser/harness.js (openCategory, selectTool, toolCategories, menuAction), test/browser/smoke.js (6 menu clicks migrated), test/browser/ui.js (+8 tests), soak.js (world-unit fixture).",
+        "THE SOAK REGRESSION IS THE IMPORTANT FINDING. The layout change broke the soak fixture, not the game: soak.js clicked hardcoded screen pixels, the dock grew from about 48px to 124px, and the factory click landed on a dock button. The factory was never placed, so houses had no work destination and trips halved from 11 to 6 - and the soak STILL PASSED, because it asserted the house and shop batches but never the factory. The fixture is now in world units converted via worldToScreen, asserts the factory batch, and calls elementFromPoint before every click to refuse a covered point. This is the exact failure mode TESTING.md warns about: browser drawing should use camera transforms derived from fixture world points, computed after a layout change, rather than tweaking arbitrary click constants until green.",
+        "The controller throws on an unknown state field. A misspelled key would otherwise become silent state that nothing renders - the same class of bug as a second copy of the active tool, only harder to see. test/browser/ui.js asserts the throw.",
+        "The active tool is stored once. main.js reads ui.activeTool, the dock subscribes for its pressed and visible state, and boot() publishes it to the canvas class from a single subscription. No component keeps its own copy.",
+        "Panels are exclusive: ui.set({openPanel}) is the only way to open the menu or the inspector, so showPanel closes the other rather than leaving two booleans to drift. The menu also closes on outside pointerdown and on Escape, and Escape now cancels the innermost thing (dialog, then panel, then road draft, then inspector) instead of help-then-tool.",
+        "New map confirms only when dirty, which is set by building a road, roundabout, traffic light or building, and by bulldozing. Save clears it. Autosave deliberately does NOT: the autosave slot is a safety net, not the player's save, so discarding the city still deserves a prompt.",
+        "Deliberately deferred to S02.2b: the Traffic/Access/Pollution layer toggles with legends, the audio enable control, the Import/Export menu flows, depletion discoverability (reason plus progression link), and the full interaction matrix. The controller already carries `overlay` for them, and src/render.js is untouched, so no renderer change is needed until then.",
+        "STATUS: implementation and every check in the task's Verify line pass. Held at in_progress because the operator asked for a review checkpoint at the end of each session, and the layout, the speed labels and the new menu are exactly what DESIGN section 7 wants a human to look at. Flip to done on approval."
+      ]
+    },
+    {
+      "id": "S02.2",
+      "status": "pending",
+      "dependsOn": [
+        "S02.2a"
+      ],
+      "file": "stages/02-experience.md",
       "evidence": [],
-      "notes": []
+      "notes": [
+        "Split by AMEND-S02.2-split. This task is now the REMAINING half and must not start until S02.2a is done: Traffic/Access/Pollution layer toggles with labelled legends wired to real renderer flags (Access = reachable/unreachable from the existing graph; Noise only in S06.3), the audio enable control, the Import/Export/Recovery menu flows, depletion discoverability with a reason and a progression link, and the full browser interaction matrix (every category, every tool, overlays, mute, valid and invalid import, compact inspector scroll, no UI input reaching the canvas). The controller field `overlay` already exists and is null; src/render.js has not been modified yet."
+      ]
     },
     {
       "id": "S02.3",
@@ -1161,7 +1213,24 @@
       "notes": []
     }
   ],
-  "planAmendments": [],
+  "planAmendments": [
+    {
+      "id": "AMEND-S02.2-split",
+      "date": "S02.2",
+      "oldAssumption": "S02.2 was written as one task: 6 numbered items, a full layout rewrite, a new overlay/layer system wired into render.js, three new modules (src/ui/hud.js, src/ui/toolbar.js, src/ui/menu.js) and a browser test matrix.",
+      "evidence": "EXECUTOR.md section 4 sets a working limit of one task, 3-6 edited production files and one main behaviour change per test cycle. S02.2 as written needs index.html + src/ui.css + src/main.js + src/render.js modified plus three new modules plus tests: about 7 production files, two independent behaviour changes (interface architecture, and a new analytic overlay system). It does not fit one focused session, and section 4 requires splitting before editing rather than generating the whole phase at once.",
+      "newContract": "Split into S02.2a and S02.2b with an explicit dependency. S02.2a (this task): src/ui/controller.js holding {activeTool, openCategory, openPanel, overlay, dialog} as the single owner; grouped 56px top status band; compact categorical dock with a contextual subtool row; menu popover; 296px collapsing inspector; visible speed labels Pause/1x/3x/8x; New map confirms only when the city is dirty; src/ui/hud.js, src/ui/toolbar.js and src/ui/menu.js created where a real responsibility is extracted. S02.2b: Traffic/Access/Pollution layer toggles with labelled legends wired to real renderer flags, the audio enable control, Import/Export/Recovery menu flows, depletion discoverability with reason and progression link, and the full browser interaction matrix. The overlay field is created in S02.2a but stays null until S02.2b wires the renderer.",
+      "affectedIds": [
+        "S02.2",
+        "S02.2a",
+        "S02.2b",
+        "S02.3"
+      ],
+      "newTests": "test/browser/ui.js gains the dock/category structure, single-owner controller state, speed label, dirty-city confirmation and layout-metric checks. S02.2b adds the layer, mute, import/export and canvas-passthrough matrix.",
+      "operatorDecision": "Operator selected the two-way split (S02.2a now, S02.2b next session) when offered against a three-way split and a single-session attempt. No requirement was removed: every S02.2 item is assigned to a, b, or both.",
+      "rendererNote": "src/render.js is NOT modified by S02.2a. Overlay flags are read by the renderer only in S02.2b, so no renderer change is needed until then."
+    }
+  ],
   "review": {
     "mode": "self-review",
     "independentReviewPerformed": false,

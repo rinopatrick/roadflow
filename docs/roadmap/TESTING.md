@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **265 passes** and `npm run test:browser` **30**, as of S02.1. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **265 passes** and `npm run test:browser` **38**, as of S02.2a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 ### Pitfall: verify a backup manifest from inside the backup
 
@@ -50,6 +50,24 @@ A test that passes proves nothing until you have seen it fail for the right reas
 
 When a mutation passes, decide which of these applies before concluding the test is weak, and report the distinction rather than quietly dropping the check.
 
+### Pitfall: a fixture click can silently land on interface chrome
+
+`soak.js` used to place its buildings by clicking hardcoded screen pixels derived from the canvas centre. S02.2 made the bottom dock taller (about 48px to 124px), the factory click landed on a dock button, the factory was never placed, and trips fell from 11 to 6. **The soak still passed**, because it asserted the house and shop batches but never the factory.
+
+Two rules follow, and both are now enforced in the code:
+
+1. Express fixture positions in **world units** and convert with `renderer.worldToScreen`, so a layout change cannot move the target. This is the same rule as "do not use screen coordinates as permanent graph IDs" above.
+2. **Assert every fixture element exists**, not most of them. A fixture that half-builds a city can still satisfy a weak assertion.
+
+`soak.js` now calls `elementFromPoint` before each click and fails with the covered element named:
+
+```text
+factory 1: fixture point [-150,270] maps to screen (490, 670), which is covered by
+"subtools" instead of the map. Move the fixture point or the panel.
+```
+
+Verify that guard in the red direction whenever a panel changes size.
+
 ### Pitfall: browser tests share one page and leak state
 
 `test/browser/smoke.js` runs its cases against a single page in declaration order, so an earlier case can pollute a later one. Two real leaks occurred during S01.7:
@@ -70,6 +88,8 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend the runner to include later browser files |
 | `npm run test:browser` | S02.1 | **Extended.** test/browser/ui.js: ui.css tokens vs uiTokens.js, measured contrast ratios, icon-map shape, emoji-free controls, real inventory badges, focus ring and reduced motion, depleted stock, inspector title, plus 60 tool-state captures at 1440x900 and 1024x768 |
 | `node scripts/mutate-s021.mjs` | S02.1 | Mutation harness for the S02.1 guards; applies each mutation, runs test/browser/ui.js, restores the file and prints which tests failed |
+| `npm run test:browser` | S02.2a | **Extended.** test/browser/ui.js gains the dock category structure, single-owner controller state (including the unknown-key throw), speed labels, the top-band and dock layout contract, the menu popover, dirty-only New map confirmation, and interface-chrome click passthrough. The harness gains `openCategory`, `selectTool`, `toolCategories` and `menuAction` |
+| `node scripts/mutate-s022a.mjs` | S02.2a | Mutation harness for the S02.2a guards (10 mutations, 10 caught) |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |
 | `node --test test/coreState.test.js` | S01.1 | **Created.** RNG state, ID source, deterministic graph IDs |

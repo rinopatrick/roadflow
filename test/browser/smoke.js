@@ -10,7 +10,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  startServer, launchGame, runDir, worldState, dismissHelp,
+  startServer, launchGame, runDir, worldState, dismissHelp, menuAction,
 } from './harness.js';
 
 // Viewport centre for 1280x800. Canvas is full-window at origin, so screen
@@ -113,7 +113,7 @@ test('rejected placement does not consume stock', async () => {
 test('save writes a parseable v2 snapshot with full world state', async () => {
   const { page } = game;
 
-  await page.click('#btnSave');
+  await menuAction(page, 'btnSave');
   await page.waitForTimeout(300);
 
   const save = await page.evaluate(() => {
@@ -166,9 +166,9 @@ test('reloading restores the same city rather than a fresh one', async () => {
   const before = await read();
   assert.ok(before.edges > 0 && before.buildings > 0, 'there is a city to save');
 
-  await page.click('#btnSave');
+  await menuAction(page, 'btnSave');
   await page.waitForTimeout(300);
-  await page.click('#btnLoad');
+  await menuAction(page, 'btnLoad');
   await page.waitForTimeout(600);
 
   const after = await read();
@@ -204,9 +204,9 @@ test('an active trip survives a save and reload', async () => {
   });
   assert.ok(!placed.error, `fixture must produce a vehicle mid-trip: ${placed.error}`);
 
-  await page.click('#btnSave');
+  await menuAction(page, 'btnSave');
   await page.waitForTimeout(300);
-  await page.click('#btnLoad');
+  await menuAction(page, 'btnLoad');
   await page.waitForTimeout(600);
 
   const restored = await page.evaluate(() => {
@@ -289,7 +289,7 @@ test('a failed load does not report success', async () => {
   await page.evaluate(() => localStorage.setItem('roadflow.save', 'garbage'));
   // Clear toasts left over from earlier tests so only NEW ones are inspected.
   await page.evaluate(() => { document.getElementById('toasts').innerHTML = ''; });
-  await page.click('#btnLoad');
+  await menuAction(page, 'btnLoad');
   await page.waitForTimeout(400);
 
   // The v1 handler always toasted "City loaded." even when the load failed.

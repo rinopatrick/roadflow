@@ -170,3 +170,49 @@ export async function dismissHelp(page) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 }
+
+/**
+ * Opens a tool category in the dock.
+ *
+ * S02.2 groups the dock into categories whose subtools are only visible while
+ * the category is open, so a click on a hidden tool button would never become
+ * actionable. Tests that want to exercise a real click go through this.
+ */
+export async function openCategory(page, category) {
+  const open = await page.$eval(`[data-category="${category}"]`, el => el.getAttribute('aria-expanded') === 'true');
+  if (open) return;
+  await page.click(`[data-category="${category}"]`);
+  await page.waitForFunction(
+    c => document.querySelector(`[data-category="${c}"]`)?.getAttribute('aria-expanded') === 'true',
+    category, { timeout: 5000 });
+}
+
+/**
+ * Selects a tool through the real controls: open the owning category, then
+ * click the tool button. The owning category is read from the button itself
+ * rather than duplicated here, so the test cannot drift from the app.
+ */
+export async function selectTool(page, tool) {
+  const category = await page.$eval(`[data-tool="${tool}"]`, el => el.dataset.toolCategory);
+  await openCategory(page, category);
+  await page.click(`[data-tool="${tool}"]`);
+}
+
+/** The category that owns each tool, as the dock declares it. */
+export async function toolCategories(page) {
+  return page.$$eval('[data-tool]', els => Object.fromEntries(els.map(e => [e.dataset.tool, e.dataset.toolCategory])));
+}
+
+/**
+ * Opens the menu popover and clicks one of its actions.
+ *
+ * S02.2 moved Save/Load/Recover/New map/Help behind the menu button (DESIGN
+ * section 1: "Menu groups Save/Load/Import/Export/Settings/New city"), so a
+ * direct click on the action is no longer possible without opening it first.
+ */
+export async function menuAction(page, id) {
+  await page.click('#menubtn');
+  await page.waitForFunction(
+    () => document.getElementById('menupop').offsetParent !== null, null, { timeout: 5000 });
+  await page.click(`#${id}`);
+}
