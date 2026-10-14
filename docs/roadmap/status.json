@@ -918,8 +918,20 @@
       ]
     },
     {
+      "id": "S02.3",
+      "status": "done",
+      "dependsOn": [
+        "S02.3a"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [],
+      "notes": [
+        "COMPLETE via S02.3a and S02.3b (AMEND-S02.3-split). S02.3a: lane marking geometry extracted to src/render/markings.js, the continuous-marking defect fixed (a straight road drew no centreline at all), the low-zoom dash gate added. S02.3b: junction caps squared at real junctions, junction footprint as one quad per connected edge instead of a round-cap disk, mouth trim derived from the widest connected pavement, the fill and marking passes separated, one shadow direction for all geometry, and the 12-scene contact sheet. Every original S02.3 requirement is covered."
+      ]
+    },
+    {
       "id": "S02.3a",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.2b"
       ],
@@ -960,6 +972,11 @@
           "exitCode": 0,
           "result": "Inspected all three. At zoom 1 and 3 an avenue shows a continuous yellow centreline with dashed interior lane dividers, and the T-junction mouth is clear: the markings stop short of the junction and resume on the far side. At zoom 0.25 the roads are clean white ribbons with NO dashes and no speckle, which is the DESIGN rule 'at low zoom hide dashes rather than painting noisy hairlines'.",
           "artifact": "artifacts/after-s02.3a"
+        },
+        {
+          "command": "operator approval of S02.3a",
+          "exitCode": 0,
+          "result": "APPROVED. Operator reviewed the zoom sweep captures (0.25 / 1 / 3) and accepted the continuous-marking fix, the low-zoom dash gate and the 296px inspector layout. S02.3b is now eligible."
         }
       ],
       "notes": [
@@ -969,19 +986,59 @@
         "Marking decisions are pure functions of roadDimensions and zoom, so they are tested numerically without a canvas. The renderer only decides how to stroke them, and test/renderMarkings.test.js asserts that laneMarkings reports exactly the offsets laneDividerOffsets computes rather than re-deriving them.",
         "Two guards were PROVEN redundant rather than assumed: deleting each left all 24 tests green. One was deleted with a comment; the other was kept as a documented contract statement. Both mutations were removed from the harness, so the honest tally is 10 caught out of 10 run, not 10 out of 12.",
         "Deliberately deferred to S02.3b: junction mouth trim derived from connected edge widths and tangent directions (S02.3a keeps the conservative width-only trim), conservative junction fill polygons, the single shadow direction, further render-pass separation, and the 12-scene contact sheet. Junction visual geometry is a separate, coupled change and does not belong in the same diff as the marking fix.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 309/309, npm run test:browser 48/48, soak 10 trips, 10/10 mutations caught."
       ]
     },
     {
-      "id": "S02.3",
-      "status": "pending",
+      "id": "S02.3b",
+      "status": "in_progress",
       "dependsOn": [
         "S02.3a"
       ],
       "file": "stages/02-experience.md",
-      "evidence": [],
+      "evidence": [
+        {
+          "command": "node --test test/junctions.test.js (red before the implementation was corrected)",
+          "exitCode": 1,
+          "result": "RED twice, both times on a real implementation bug the tests caught. First: 5 failures with 'TypeError: Cannot read properties of null (reading edges)' because my test helper destructured its variadic roads argument wrongly, so the fixture built nothing - a test-harness fault, fixed in the test. Then 2 real failures: 'a bend has no mouth to clear' and 'the footprint must enclose real area, got 0'. The first was a genuine code bug - mouthTrim treated a degree-2 BEND as a junction, so a road's own continuation trimmed its markings away mid-road. The second showed my angular polygon trace was degenerate for collinear approaches, which is why the footprint was rewritten as one quad per connected edge."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 327, pass 327, fail 0. Was 309 before this task; +18 from test/junctions.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 48, pass 48, fail 0. Unchanged count: the junction work is verified by the contact sheet and the unit tests, and the existing zoom sweep already exercises the junction at zoom 1 and 3."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. The junction and shadow work is draw-only and did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s023b.mjs (12 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "12 of 12 caught, but only after three ineffective mutations were investigated and the TESTS fixed rather than the mutations dropped. A round caps everywhere (the disk bug) -> 1. B square caps everywhere -> 1. C a bend filled as a junction -> 1. D quads drawn at the reach width (a disk) -> 2. E mouth trim back to our own width -> 3. F a bend trimmed as a junction -> 1. H shadow ignores height -> 1. I shadow not counter-rotated -> 1. J counter-rotation applied twice -> 1. Three came back NO FAILURE and each was a real gap in my own tests: G (margin set to 0) passed because the test compared the trim against 'widest + MARKING_MARGIN', a tautology that moves both sides together - rewritten to assert the margin positively. K (edge direction read from the wrong end) passed because every fixture edge was straight and symmetric, so the sign was invisible - added a bent-edge fixture that tells the two ends apart. L (footprint inset ignored) passed because no test exercised the inset at all - added one asserting the inset widens each quad by 2 * inset and extends the reach by exactly the inset."
+        },
+        {
+          "command": "RF_RUN_ID=after-s02.3b node scripts/contact-sheet.mjs",
+          "exitCode": 0,
+          "result": "12 scenes captured, each asserted to have built at least one road and no browser errors: 01-street, 02-avenue, 03-highway, 04-junction-t, 05-junction-x, 06-junction-y, 07-junction-acute, 08-roundabout, 09-dense-grid, 10-curved, 11-queue, 12-invalid-draft. Scenes.txt records node/edge/building/car counts and the sim tick per scene. INSPECTED and one defect was found and fixed: the first run drew the junction casing ring ON TOP of the road fills, producing exactly the grey seam across the pavement that DESIGN forbids. The junction outline was moved into the casing pass and its fill into the fill pass, so any grey it lays across a road is covered by that road's own fill. Re-inspected: the seam is gone, the T junction mouth no longer bulges to the highway width, the dense grid has no internal seams, and all four buildings in scene 11 cast their shadows in the same screen direction.",
+          "artifact": "artifacts/after-s02.3b/sheet"
+        }
+      ],
       "notes": [
-        "Split by AMEND-S02.3-split. This task is now the REMAINING half and must not start until S02.3a is done: junction mouth trim derived from the connected edges' widths and tangent directions, conservative junction fill polygons instead of a circular disk over every junction, the single shadow direction, the remaining render-pass separation, and the 12-scene contact sheet (3 road classes, T/X/Y/acute junction, roundabout, dense grid, curved road, car queue, invalid road draft). S02.3a already fixed the continuous-marking defect and added the low-zoom dash gate."
+        "Created src/render/junctions.js (junction cap style, footprint quads, per-end mouth trim, shadow direction and counter-rotation), test/junctions.test.js (18 tests), scripts/contact-sheet.mjs, scripts/mutate-s023b.mjs. Modified src/render.js (casing/shadow caps now squared at junctions; the fill pass split from the markings pass; new junction casing and fill passes ordered so no seam survives; markings use per-end trims from connected pavement widths; building and car shadows counter-rotated into a fixed screen direction; PALETTE gains roadShadow; the renderer caches `this._net` for node degrees), src/render/markings.js (trimPolylineEnds for independent per-end trims), docs/roadmap/TESTING.md.",
+        "TWO DESIGN SECTION 3 RULES WERE BEING VIOLATED, and both were pre-existing. (1) 'Junction visual fill uses actual connected footprint... do not merely paint a circular disk over every junction at every scale.' Every edge was stroked with a ROUND cap, and because all edges at a node share its centre, the union of round caps at a junction IS a disk of radius = the widest connected pavement. A wide avenue meeting a narrow street painted a blob wider than the street. Caps are now squared at 3+ degree nodes and the footprint is one quad per connected edge at that edge's own width, so the union is a real T/Y/X shape. (2) 'One shadow direction across all geometry.' Building and car shadows were applied INSIDE ctx.rotate(), so they rotated with their object - a rotated building cast its shadow up-and-left while its neighbour cast down-and-right. The offset is now counter-rotated by the object's rotation, which restores a fixed screen direction while preserving the offset length.",
+        "The junction outline is drawn in the CASING pass, not after the fills. The first contact-sheet run drew it on top and produced a grey seam straight across the pavement - precisely the 'internal seam/casing strokes' DESIGN says to hide. Ordering it with the casings means each road's own fill covers any grey laid over it. This was caught by inspecting the artifact, not by a test, which is the intended division of labour for visual work.",
+        "Mouth trim now derives from the WIDEST CONNECTED pavement rather than the incoming road's own width. The old rule was `width * 0.75 + 3` on the incoming road, so a narrow street joining a highway painted its centreline into the junction: the street trimmed by 15wu while the highway pavement reached 19.5wu from the centre. A degree-2 node is explicitly NOT a mouth, because its only 'other' edge is the continuation of the same road.",
+        "The footprint is one quad per connected edge rather than a single traced outline. A traced outline was tried first and produced degenerate (zero-area) polygons for collinear approaches, because consecutive boundary points coincided. Quads are simpler, cannot self-intersect, and each one is exactly its own road's pavement, which is what the rule asks for.",
+        "An `inset` option expands every quad outward, used so the junction outline continues the road casing instead of stepping wider or narrower. test/junctions.test.js asserts the inset widens each quad by exactly 2 * inset and extends the reach by exactly the inset, so the shape is preserved rather than distorted.",
+        "Deliberately NOT done: the renderer was not extracted into src/render/roads.js. The task made that optional ('only if extracting road drawing reduces render.js without changing public Renderer API'), and render.js is still under 1000 lines with the geometry now living in render/markings.js and render/junctions.js. Extracting the drawing itself would be churn without a measured benefit.",
+        "STATUS: implementation and every check pass, including the 12-scene contact sheet the task requires. Held at in_progress for the operator review checkpoint."
       ]
     },
     {

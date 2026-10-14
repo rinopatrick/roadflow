@@ -157,6 +157,33 @@ export function trimPolyline(pts, cum, trim) {
 }
 
 /**
+ * A polyline restricted to `[start, total - end]`, both interpolated.
+ *
+ * A junction at one end and a dead end at the other need different clearances,
+ * so the two trims are supplied separately. See `trimPolyline` for why the ends
+ * are interpolated rather than snapped to the nearest vertex.
+ */
+export function trimPolylineEnds(pts, cum, startTrim, endTrim) {
+  if (!Array.isArray(pts) || pts.length < 2) return [];
+  if (!Array.isArray(cum) || cum.length !== pts.length) return [];
+  const total = cum[cum.length - 1];
+  if (!Number.isFinite(total) || total <= 0) return [];
+
+  const s = clampTrim(startTrim, total);
+  const e = clampTrim(endTrim, total);
+  const from = s;
+  const to = total - e;
+  if (!(to > from)) return [];
+
+  const out = [pointAtArc(pts, cum, from)];
+  for (let k = 0; k < pts.length; k++) {
+    if (cum[k] > from && cum[k] < to) out.push([pts[k][0], pts[k][1]]);
+  }
+  out.push(pointAtArc(pts, cum, to));
+  return out;
+}
+
+/**
  * Shifts every point of a polyline sideways by `off` world units.
  *
  * The normal is taken from the segment through each point, so a lane keeps a
