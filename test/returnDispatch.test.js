@@ -18,9 +18,10 @@ import { readFileSync } from 'node:fs';
 import { createIdSource } from '../src/core.js';
 import { RoadNetwork } from '../src/roadNetwork.js';
 import { Economy, RETURN_RETRY_SECONDS } from '../src/economy.js';
+import { serializeWorld, validateSnapshot, hydrateWorld } from '../src/worldSnapshot.js';
 import { TrafficSim } from '../src/traffic.js';
 
-const mockTerrain = { isBuildable: () => true };
+const mockTerrain = { seed: 7, isBuildable: () => true, isRoadable: () => true, sample: () => 0 };
 
 /** Straight road with a home and a shop attached; no factory (no pollution). */
 function serviceWorld() {
@@ -244,42 +245,43 @@ test('processReturns is safe with no pending work', () => {
   assert.equal(eco.pendingReturnCount, 0);
 });
 
-test('CHARACTERIZATION: pending returns are not yet persisted across save/load', () => {
-  // Current, documented limitation - NOT desired behaviour.
-  //
-  // Economy.toJSON() does not serialize _pendingReturns, cancelledReturns or
-  // cancellationReasons, and Economy.fromJSON() builds a fresh instance (which
-  // initializes an empty queue). Saving during the dwell therefore drops the
-  // queued return trip. No crash, no corruption - the trip is simply lost.
-  //
-  // The full snapshot (which includes pending returns, clocks and RNG state)
-  // is owned by S01.7. This test pins today's behaviour so that S01.7 shows up
-  // as a deliberate diff, and so the gap cannot be mistaken for a regression.
-  // Tracked as GAP-pending-returns-not-saved in docs/roadmap/status.json.
+test('a queued return survives a save and reload', () => {
+  // S01.7 closed this. `Economy.toJSON()` alone still omits lifecycle state (it
+  // is a topology/economy serializer), but the WORLD snapshot in
+  // `worldSnapshot.js` carries it and `hydrateWorld` restores it. These tests go
+  // through the snapshot path, which is what the game actually uses.
   const { net, eco, home, shop } = serviceWorld();
   eco._completeTrip({ id: 'outbound' }, shop.id, home.id);
   assert.equal(eco.pendingReturnCount, 1, 'a return is queued before saving');
 
-  const data = eco.toJSON();
-  assert.equal(data.pendingReturns, undefined,
-    'toJSON currently omits pending returns; S01.7 must add this field');
+  const snapshot = serializeWorld({
+    terrain: mockTerrain, net, traffic: new TrafficSim(net), eco,
+    ids: createIdSource(), camera: { x: 0, y: 0, zoom: 1 }, settings: { speed: 1, audio: true },
+  });
+  const verdict = validateSnapshot(snapshot);
+  assert.equal(verdict.ok, true, `snapshot must validate: ${verdict.errors?.join('; ')}`);
 
-  const reloaded = Economy.fromJSON(net, mockTerrain, data);
-  assert.equal(reloaded.pendingReturnCount, 0,
-    'after S01.7 this must be 1 - the queued return should survive a save');
+  const restored = hydrateWorld(verdict.data);
+  assert.equal(restored.eco.pendingReturnCount, 1,
+    'the queued return must survive a save/load');
+  assert.equal(restored.eco._pendingReturns[0].from, shop.id, 'origin preserved');
+  assert.equal(restored.eco._pendingReturns[0].to, home.id, 'destination preserved');
 });
 
-test('cancellation counters are also absent from the current serializer', () => {
-  // Same ownership as above (S01.7). Documented so the counters are not
-  // assumed to survive a reload.
-  const { eco, home, shop } = serviceWorld();
+test('cancellation counters survive a save and reload', () => {
+  const { net, eco, home, shop } = serviceWorld();
   eco._completeTrip({ id: 'outbound' }, shop.id, home.id);
   eco.remove(shop.id);
   const { spawnCar } = recorder();
   eco.processReturns(100, spawnCar);
   assert.equal(eco.cancelledReturns, 1, 'cancellation happened');
 
-  const data = eco.toJSON();
-  assert.equal(data.cancelledReturns, undefined,
-    'cancellation counters are not serialized yet (S01.7)');
+  const snapshot = serializeWorld({
+    terrain: mockTerrain, net, traffic: new TrafficSim(net), eco,
+    ids: createIdSource(), camera: { x: 0, y: 0, zoom: 1 }, settings: { speed: 1, audio: true },
+  });
+  const restored = hydrateWorld(validateSnapshot(snapshot).data);
+
+  assert.equal(restored.eco.cancelledReturns, 1, 'cancellation count preserved');
+  assert.equal(restored.eco.cancellationReasons.deletedOrigin, 1, 'reason preserved');
 });

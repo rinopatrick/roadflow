@@ -8,8 +8,8 @@ import { TrafficSim } from './traffic.js';
 import { Economy, BUILDING_DEFS } from './economy.js';
 import { Renderer } from './render.js';
 import { toast, openInspect, closeInspect, inspectOpen } from './ui.js';
-import { saveGame, loadGame, hasSave, exportGame } from './save.js';
-import { sfx, setAudioEnabled } from './audio.js';
+import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, autosave, importGame, exportGame, exportFilename, AUTOSAVE_INTERVAL_MS } from './save.js';
+import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { cityCongestion, formatCongestion } from './metrics.js';
 import { reconcileTrafficAfterEdit } from './access.js';
 
@@ -32,16 +32,60 @@ function newGame(seed = (() => {
   const p = new URLSearchParams(location.search).get('seed');
   return p ? (parseInt(p, 10) || 0) : (Math.random() * 1e9) | 0;
 })()) {
-  terrain = new Terrain(seed);
-  ids = createIdSource();
-  net = new RoadNetwork({ ids });
+  const worldIds = createIdSource();
+  const worldNet = new RoadNetwork({ ids: worldIds });
   // Simulation randomness is seeded from the same seed as the terrain, so a
   // seed fully determines the world rather than only its geography.
-  traffic = new TrafficSim(net, { rng: makeRng(seed) });
-  eco = new Economy(net, terrain, seed);
-  eco.onLevelUp = (lvl) => { toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn'); sfx.levelUp(); };
-  eco.onToast = (m, k) => toast(m, k);
-  traffic.time = 0;
+  const worldTraffic = new TrafficSim(worldNet, { rng: makeRng(seed) });
+  const worldEco = new Economy(worldNet, new Terrain(seed), seed);
+
+  replaceWorld({
+    terrain: worldEco.terrain,
+    net: worldNet,
+    traffic: worldTraffic,
+    eco: worldEco,
+    ids: worldIds,
+    camera: renderer.cam,
+    settings: { speed, audio: audioEnabled() },
+  });
+}
+
+/**
+ * Assembles the canonical runtime world (CONTRACTS.md section 2).
+ * `camera` is the live renderer camera, since the renderer is a view rather
+ * than persisted state.
+ */
+function getWorld() {
+  return {
+    terrain, net, traffic, eco, ids,
+    camera: renderer.cam,
+    settings: { speed, audio: audioEnabled() },
+  };
+}
+
+/**
+ * Replaces the live world in ONE place.
+ *
+ * Every caller that used to assign `terrain`/`net`/`traffic`/`eco` separately
+ * goes through here, so callbacks are rebound exactly once and no closure can be
+ * left pointing at a previous world.
+ */
+function replaceWorld(world) {
+  terrain = world.terrain;
+  net = world.net;
+  traffic = world.traffic;
+  eco = world.eco;
+  ids = world.ids;
+
+  // The renderer holds `cam` by reference; copy the values into it so existing
+  // references stay valid instead of being replaced.
+  if (world.camera) Object.assign(renderer.cam, world.camera);
+  if (world.settings) {
+    setSpeed(world.settings.speed ?? 1);
+    setAudioEnabled(world.settings.audio !== false);
+  }
+
+  bindWorldCallbacks();
   selected = null;
   clock.reset();
   closeInspect();
@@ -50,34 +94,37 @@ function newGame(seed = (() => {
   updateHud(true);
 }
 
-function loadFromSave() {
-  const data = loadGame();
-  if (!data) { newGame(); return; }
-  terrain = data.terrain;
-  net = data.net;
-
-  // Adopt a fresh ID source and reserve every loaded ID, so construction after
-  // a load can never reissue an identifier that already exists in the save.
-  ids = createIdSource();
-  for (const id of net.nodes.keys()) ids.reserve(id);
-  for (const id of net.edges.keys()) ids.reserve(id);
-  // Building IDs too: loadGame() deserializes the economy before net.ids is
-  // attached, so reserve them here to guarantee new placements never collide.
-  for (const id of eco.buildings.keys()) ids.reserve(id);
-  net.ids = ids;
-
-  traffic = new TrafficSim(net, { rng: makeRng(data.terrain.seed) });
-  traffic.time = data.simTime;
-  eco = data.eco; // already deserialized by loadGame()
-  eco.onLevelUp = (lvl) => { toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn'); sfx.levelUp(); };
+/** Reattaches behaviour that cannot be serialized. Called once per world. */
+function bindWorldCallbacks() {
+  eco.onLevelUp = (lvl) => {
+    toast(`City leveled up — level ${lvl}! New buildings granted.`, 'warn');
+    sfx.levelUp();
+  };
   eco.onToast = (m, k) => toast(m, k);
-  if (data.camera) renderer.cam = { ...renderer.cam, ...data.camera };
-  selected = null;
-  clock.reset();
-  closeInspect();
-  renderer.buildTerrain(terrain);
-  updateBatchUI();
-  updateHud(true);
+}
+
+/**
+ * Loads a saved city.
+ *
+ * Returns true on success. On failure the CURRENT WORLD IS LEFT UNTOUCHED and
+ * the reason is surfaced to the player: the v1 code called `newGame()` on any
+ * failure and then showed a "City loaded." success toast.
+ */
+function loadFromSave({ source = 'manual' } = {}) {
+  const result = source === 'backup'
+    ? recoverFromBackup({ hooks: {} })
+    : loadGame({ hooks: {} });
+
+  if (!result.ok) {
+    toast(result.error, 'warn');
+    return false;
+  }
+
+  replaceWorld(result.world);
+  if (result.warnings?.length) {
+    toast(`City loaded with ${result.warnings.length} note${result.warnings.length === 1 ? '' : 's'}.`, 'warn');
+  }
+  return true;
 }
 
 // ---------- tools ----------
@@ -429,13 +476,32 @@ document.querySelectorAll('.spd-btn').forEach(b =>
 
 // ---------- menu ----------
 document.getElementById('btnSave').addEventListener('click', () => {
-  toast(saveGame({ terrain, net, eco, renderer, traffic }) ? 'City saved.' : 'Save failed!', 'warn');
+  const res = saveGame(getWorld());
+  // Report what actually happened. The v1 handler printed "City saved." for a
+  // boolean, but the failure branch was easy to miss.
+  toast(res.ok ? 'City saved.' : `Save failed — ${res.error}`, res.ok ? '' : 'warn');
   sfx.click();
 });
 document.getElementById('btnLoad').addEventListener('click', () => {
-  if (!hasSave()) { toast('No save found.', 'warn'); return; }
-  loadFromSave();
-  toast('City loaded.');
+  // Distinguish "nothing saved" from "saved but damaged". The v1 handler checked
+  // only existence, so a corrupt save reported "No save found.", which is
+  // misleading and hid the fact that a backup may be recoverable.
+  const probe = loadGame({ hooks: {} });
+  if (!probe.ok && probe.empty) { toast('No save found.', 'warn'); return; }
+  if (!probe.ok) {
+    const hint = hasRecoverableBackup() ? ' Try Recover.' : '';
+    toast(`${probe.error}.${hint}`, 'warn');
+    return;
+  }
+
+  // Valid: adopt it. `loadFromSave` re-reads so the hooks are wired by
+  // replaceWorld rather than by this probe.
+  if (loadFromSave()) toast('City loaded.');
+  sfx.click();
+});
+document.getElementById('btnRecover').addEventListener('click', () => {
+  if (!hasRecoverableBackup()) { toast('No backup is available to recover.', 'warn'); return; }
+  if (loadFromSave({ source: 'backup' })) toast('Recovered the previous save.');
   sfx.click();
 });
 document.getElementById('btnNew').addEventListener('click', () => {
@@ -552,15 +618,42 @@ function boot() {
   window.addEventListener('resize', () => renderer.resize());
   buildToolbar();
   setTool('road');
-  if (hasSave() && confirm('A saved city was found. Load it?')) loadFromSave();
-  else newGame();
+
+  // Recovery is only offered when a VALID backup exists, so the button cannot
+  // promise something it cannot deliver.
+  const recoverBtn = document.getElementById('btnRecover');
+  if (recoverBtn) recoverBtn.style.display = hasRecoverableBackup() ? '' : 'none';
+
+  // Never start a new city automatically. If a save exists but is unreadable, the
+  // player is told and gets a fresh map deliberately, rather than silently.
+  if (hasSave()) {
+    if (confirm('A saved city was found. Load it?')) {
+      if (!loadFromSave()) newGame();
+    } else {
+      newGame();
+    }
+  } else {
+    newGame();
+  }
+
+  // Autosave into its own slot, so it can never overwrite a manual save.
+  setInterval(() => {
+    const res = autosave(getWorld());
+    if (!res.ok && !res.error?.includes('unavailable')) {
+      toast(`Autosave failed — ${res.error}`, 'warn');
+    }
+  }, AUTOSAVE_INTERVAL_MS);
+
   // debug/testing hook
-  // `renderer` is exposed so visual tests can set camera zoom/position precisely
-  // instead of approximating it with synthetic wheel events. Read/write only;
-  // gameplay never reads from __rf.
+  // `renderer` and `save` are exposed so browser tests can set the camera
+  // precisely and exercise storage directly. Read/write only; gameplay never
+  // reads from __rf.
   window.__rf = {
     get state() { return { net, eco, traffic, terrain }; },
     get renderer() { return renderer; },
+    get world() { return getWorld(); },
+    save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
+    replaceWorld,
   };
   document.getElementById('help').classList.add('open');
   requestAnimationFrame(loop);
