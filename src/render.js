@@ -9,6 +9,7 @@ import { BUILDING_DEFS } from './economy.js';
 import { UI_TOKENS, alpha } from './uiTokens.js';
 import { trafficOverlay, ACCESS_STATE } from './layers.js';
 import { laneMarkings, trimPolyline, trimPolylineEnds, offsetPolyline } from './render/markings.js';
+import { worldToCss, worldToDevice, cssToWorld, zoomAtPointer } from './camera.js';
 import {
   capForNode, junctionFootprint, edgeEndTrims, shadowOffset, offsetInRotatedFrame,
 } from './render/junctions.js';
@@ -80,6 +81,15 @@ export class Renderer {
     this._dpr = 1;
   }
 
+  /** CSS size plus DPR: the description the pure projection takes. */
+  view() {
+    return {
+      width: this.canvas.clientWidth || window.innerWidth,
+      height: this.canvas.clientHeight || window.innerHeight,
+      dpr: this._dpr,
+    };
+  }
+
   resize() {
     const dpr = window.devicePixelRatio || 1;
     this._dpr = dpr;
@@ -89,20 +99,33 @@ export class Renderer {
     this.canvas.height = h * dpr;
   }
 
+  /** World -> DEVICE pixels. The drawing-space name kept from CONTRACTS 1. */
   worldToScreen(x, y) {
-    const { cam } = this;
-    return [
-      (x - cam.x) * cam.zoom * this._dpr + this.canvas.width / 2,
-      (y - cam.y) * cam.zoom * this._dpr + this.canvas.height / 2,
-    ];
+    return worldToDevice(this.cam, this.view(), x, y);
   }
 
+  /**
+   * World -> CSS pixels: the space a pointer event and a screenshot share.
+   *
+   * This is the helper whose absence caused the DPR bug. `mouseScreen` arrives
+   * in CSS pixels from `e.offsetX`, so anything comparing a pointer position
+   * with the map must use this, never `worldToScreen`.
+   */
+  worldToCss(x, y) {
+    return worldToCss(this.cam, this.view(), x, y);
+  }
+
+  /** CSS pixels -> world. The inverse of `worldToCss`. */
   screenToWorld(sx, sy) {
-    const { cam } = this;
-    return [
-      (sx * this._dpr - this.canvas.width / 2) / (cam.zoom * this._dpr) + cam.x,
-      (sy * this._dpr - this.canvas.height / 2) / (cam.zoom * this._dpr) + cam.y,
-    ];
+    return cssToWorld(this.cam, this.view(), sx, sy);
+  }
+
+  /**
+   * Zooms while keeping the world point under a CSS-pixel pointer fixed.
+   * Returns the new camera; assigning it is the caller's job.
+   */
+  zoomAt(px, py, zoom) {
+    return zoomAtPointer(this.cam, this.view(), px, py, zoom);
   }
 
   // ---------- terrain ----------
@@ -607,7 +630,12 @@ export class Renderer {
     const { tool, preview, mouseWorld, mouseScreen, net, terrain, eco } = state;
     if (!mouseWorld) return;
     const [mx, my] = mouseWorld;
-    const [msx, msy] = mouseScreen || this.worldToScreen(mx, my);
+    // `mouseScreen` arrives in CSS pixels; the rest of this pass draws in device
+    // pixels. Converting at the boundary is what fixes the HiDPI offset.
+    const view = this.view();
+    const [msx, msy] = mouseScreen
+      ? [mouseScreen[0] * view.dpr, mouseScreen[1] * view.dpr]
+      : this.worldToScreen(mx, my);
 
     if (tool === 'road' || tool === 'avenue' || tool === 'highway') {
       const cls = roadDimensions({ cls: tool === 'avenue' ? 'avenue' : tool === 'highway' ? 'highway' : 'street' });

@@ -107,9 +107,9 @@ export async function startServer({ timeoutMs = 20000 } = {}) {
  * starting world. Collects console errors, page errors and failed requests
  * (favicon excluded: the dev server has no icon and a 404 there is not a bug).
  */
-export async function launchGame({ baseUrl, viewport = DEFAULT_VIEWPORT, seed = 1 } = {}) {
+export async function launchGame({ baseUrl, viewport = DEFAULT_VIEWPORT, seed = 1, deviceScaleFactor = 1 } = {}) {
   const browser = await chromium.launch();
-  const context = await browser.newContext({ viewport });
+  const context = await browser.newContext({ viewport, deviceScaleFactor });
   const page = await context.newPage();
 
   const errors = [];
@@ -126,7 +126,7 @@ export async function launchGame({ baseUrl, viewport = DEFAULT_VIEWPORT, seed = 
   await page.waitForFunction(() => !!window.__rf, null, { timeout: 20000 });
 
   return {
-    browser, context, page, errors, dialogs,
+    browser, context, page, errors, dialogs, viewport, deviceScaleFactor,
     close: async () => { await browser.close(); },
   };
 }

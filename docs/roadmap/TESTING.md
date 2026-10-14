@@ -14,7 +14,9 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **327 passes** and `npm run test:browser` **48**, as of S02.3b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **350 passes** and `npm run test:browser` **53**, as of S02.4a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+
+`launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
 `node scripts/contact-sheet.mjs` is a review artifact, not a test: it builds the twelve DESIGN section 3 scenes through the real controls, freezes the clock, captures each to `artifacts/<run-id>/sheet/`, and asserts only that every scene built at least one road and produced no browser errors. Inspect the images; the assertion only prevents an empty capture from being mistaken for a pass.
 
@@ -69,6 +71,23 @@ factory 1: fixture point [-150,270] maps to screen (490, 670), which is covered 
 ```
 
 Verify that guard in the red direction whenever a panel changes size.
+
+### Pitfall: a DPR 1 fixture cannot see a unit mismatch
+
+`worldToScreen` returned DEVICE pixels while `screenToWorld` took CSS pixels, so they were not inverses. At DPR 1 the two coincide, so every test passed. At DPR 2 the round trip was off by **850-2963 wu**, and `_drawToolPreviews` mixed a CSS-pixel `mouseScreen` (from `e.offsetX`) with a device-pixel projection, so tool badges were misplaced on every HiDPI display.
+
+Two rules follow:
+
+1. Name the unit in the function: `worldToDevice`, `worldToCss`, `cssToWorld`, `deviceToCss`. A bare `worldToScreen` invites exactly this confusion.
+2. Run the check at **DPR 2** as well as DPR 1. `launchGame({ deviceScaleFactor: 2 })` is one option.
+
+`node scripts/diagnose-projection.mjs` re-measures the round trip at both DPRs and prints the worst error; it should be 0 wu.
+
+### Pitfall: an incomplete mutation looks like a weak test
+
+Mutation N of S02.4a removed the minimum-span clamp from `fitBounds`'s X axis and came back NO FAILURE. The clamp is enforced **per axis**, so the Y axis compensated and the zoom never changed. Mutating both axes, or the Y axis alone, failed as required.
+
+Before concluding that a test is weak, check whether the mutation actually changed behaviour. The harness supports multi-part mutations via a `parts` array for this case. This is distinct from S02.3a, where two mutations really were redundant and were proven so by deleting the branches.
 
 ### Pitfall: a round stroke cap at a junction IS the circular disk
 
@@ -140,7 +159,7 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend the runner to include later browser files |
 | `npm run test:browser` | S02.1 | **Extended.** test/browser/ui.js: ui.css tokens vs uiTokens.js, measured contrast ratios, icon-map shape, emoji-free controls, real inventory badges, focus ring and reduced motion, depleted stock, inspector title, plus 60 tool-state captures at 1440x900 and 1024x768 |
 | `node scripts/mutate-s021.mjs` | S02.1 | Mutation harness for the S02.1 guards; applies each mutation, runs test/browser/ui.js, restores the file and prints which tests failed |
-| `npm run test:browser` | S02.3a | **Extended.** test/browser/ui.js gains a zoom sweep (0.25 / 1 / 3) over an avenue plus a T-junction, capturing the markings so the continuous-trim fix and the low-zoom gate can be inspected |
+| `npm run test:browser` | S02.4a | **Extended.** test/browser/ui.js gains the DPR1/DPR2 projection check, starter-region framing, Fit via button and shortcut, pointer-anchored zoom, and the HiDPI/wide capture matrix |
 | `node scripts/mutate-s022a.mjs` | S02.2a | Mutation harness for the S02.2a guards (10 mutations, 10 caught) |
 | `node --test test/layers.test.js` | S02.2b | **Created.** Overlay model: layer declarations name a real data source, traffic bands and thresholds, per-edge traffic rows, building reachability, one-overlay-at-a-time. Pure, no browser |
 | `node scripts/mutate-s022b.mjs` | S02.2b | Mutation harness for the S02.2b guards (12 mutations, 12 caught after one ineffective target was replaced) |
@@ -149,6 +168,9 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node --test test/junctions.test.js` | S02.3b | **Created.** Junction cap style, footprint quads at each own width, the inset, per-end mouth trim from the widest connected pavement, edge direction at a node, shadow direction and counter-rotation. Pure, no canvas |
 | `node scripts/contact-sheet.mjs` | S02.3b | **Created.** Review artifact: the twelve DESIGN section 3 scenes at 1440x900, frozen clock, each asserted non-empty. Inspect the images |
 | `node scripts/mutate-s023b.mjs` | S02.3b | Mutation harness for the S02.3b guards (12 mutations, 12 caught after three ineffective targets exposed test gaps that were then fixed) |
+| `node --test test/camera.test.js` | S02.4a | **Created.** Projection round trip at five view descriptions and five zooms, device/CSS relationship, zoom clamping, pointer-anchored zoom, world bounds, fit framing with margin and minimum span, starter-region determinism/buildability/ordering/fallback. Pure, no canvas |
+| `node scripts/mutate-s024a.mjs` | S02.4a | Mutation harness for the S02.4a guards (21 mutations, 21 caught; supports multi-part mutations) |
+| `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |
 | `node --test test/coreState.test.js` | S01.1 | **Created.** RNG state, ID source, deterministic graph IDs |
