@@ -147,22 +147,35 @@ Drawing the identical loop as four two-point calls gives the expected 4 edges an
 
 **Correction to my earlier claim:** this was a *contributor* to `GAP-loop-gridlock`, not the primary cause. Repairing it took the fixture from 8 of 8 vehicles stopped (92% congestion) to 3 of 7 (43% congestion), but a deadlock remains on the now-clean ring. The residual cause is E14 below.
 
-### E14 — Mutual yielding at a degree-2 node deadlocks two-way traffic (open, tracked)
+### E14 — Mutual yielding at a degree-2 node deadlocked two-way traffic (FIXED in S01.5b)
 
-A **bend is not an intersection**, but `TrafficSim._mustYield` applies intersection logic whenever `node.edges.size > 1`, which includes degree-2 nodes.
+A **bend is not an intersection**, but `TrafficSim._mustYield` applied intersection logic whenever `node.edges.size > 1`, which includes degree-2 nodes.
 
-Reproduced in the four-building soak fixture with a clean degree-2 ring (so malformed topology is ruled out): car 7 sits on `e8 dir -1` wanting `e23`, and car 10 sits on `e23 dir 1` wanting `e8`. Both stop 1.5 wu short of the same node and each waits for the other:
+Reproduced in the four-building soak fixture with a clean degree-2 ring (so malformed topology was ruled out): car 7 sat on `e8 dir -1` wanting `e23`, and car 10 sat on `e23 dir 1` wanting `e8`. Both stopped 1.5 wu short of the same node and each waited for the other:
 
-- **car 10** is held by the yield-to-the-right scan — `e8` counts as coming from its right, and cars 7/8 sit within 60 wu at under 3 wu/s
-- **car 7** is held by the occupied-intersection-zone check — car 10 is within 10 wu of the node on a crossing axis, and `_crosses(a, b)` is simply `a !== b`
+- **car 10** was held by the yield-to-the-right scan — `e8` counted as coming from its right, and cars 7/8 sat within 60 wu at under 3 wu/s
+- **car 7** was held by the occupied-intersection-zone check — car 10 was within 10 wu of the node on a crossing axis, and `_crosses(a, b)` is simply `a !== b`
 
-Neither branch is appropriate when `node.edges.size === 2`: there is no intersection to yield through, so two opposing cars on a two-way road will always block each other.
+At a **corner** the two edges always have different axes, so `_crosses()` is always true and the occupied-zone check fires in both directions simultaneously. Two opposing cars on a two-way road therefore blocked each other permanently.
 
-**Impact:** gameplay-breaking for small cities. Previously **invisible** because the broken congestion metric reported about 2% while every vehicle was stopped (E03); the S01.4 metric fix is what made it observable.
+**Impact:** gameplay-breaking for small cities, and previously **invisible** because the broken congestion metric reported about 2% while every vehicle was stopped (E03). The S01.4 metric fix is what made it observable.
 
-**Owner: S04.2** (connector reservations), acceptance gate **S04.6**. A `node.edges.size >= 3` guard is the likely minimal fix, but it is deliberately **not** applied in S01.5/S01.6: S04.2 replaces the whole yielding model, so a guard here would be discarded and could mask the real fix. Tracked as `GAP-loop-gridlock`.
+**Fix (S01.5b):** `_mustYield` exempts degree-2 nodes from the cross-traffic logic — both the occupied-zone check and the yield-to-the-right scan. A bend has no cross traffic to yield to.
 
-**Partial improvement from S01.5** (recorded because it corrects an earlier claim in this document): repairing `addRoad` topology took the fixture from **8 of 8 vehicles stopped** (69 s max wait, 92% congestion) to **3 of 7 stopped**, and the soak's city congestion from **94% to 43%**.
+**Deliberately NOT exempted:** the anti-gridlock check ("do not enter a continuation that is jammed at its start") still applies at degree-2 nodes. Once a car crosses the node it belongs to a different `(edgeId, dir, lane)` group, so per-lane car following cannot see the stopped car ahead and a rear-end overlap would become possible.
+
+| Metric (four-building fixture, 270 sim seconds) | Before S01.5 | After S01.5 | After S01.5b |
+|---|---:|---:|---:|
+| vehicles stopped | 8 of 8 | 3 of 7 | **0 of 3** |
+| completed trips | 8 | 8 | **11** |
+| max wait | 69 s | 131 s | **0.1 s** |
+| city congestion | 92% | 43% | **1.4%** |
+
+The 90-second soak agrees: **11 trips and 1% congestion with XP 35.1%**, versus 8 trips / 43% / 25.5% before this fix. Congestion no longer climbs over time, which is the signature of a permanent deadlock clearing.
+
+**Mutation-verified:** reverting the exemption fails 1 test; removing the anti-gridlock check fails 1 test. `scripts/diagnose-gridlock.mjs` now exits 0.
+
+**Process note:** S01.4 and S01.5 both deferred this to S04.2 on the reasoning that S04.2 replaces the yielding model wholesale. That deferral was wrong for the deadlock itself — it is a correctness bug, not a modelling preference, and a two-line exemption plus five tests resolved it without conflicting with the planned connector work. The lesson: "a later stage rewrites this area" justifies avoiding a *redesign*, not tolerating a known deadlock.
 
 ### E06 — Simulation randomness made the world non-reproducible (fixed in S01.1)
 

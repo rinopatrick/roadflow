@@ -13,20 +13,16 @@
       "title": "Deterministic building IDs and cosmetic rotation",
       "reason": "S01.1's determinism claim was incomplete: Economy.place still used uid(), and building rot used Math.random.",
       "evidence": "EVIDENCE.md E10, E11"
+    },
+    {
+      "id": "S01.5b",
+      "title": "Degree-2 nodes treated as bends, not intersections",
+      "reason": "S01.4/S01.5 deferred GAP-loop-gridlock to S04.2 on the grounds that S04.2 replaces the yielding model. That deferral was wrong for the deadlock itself: it is a correctness bug, not a modelling preference, and a two-line exemption plus five tests resolved it without conflicting with the planned connector work.",
+      "evidence": "EVIDENCE.md E14",
+      "verification": "unit 189/189, browser 10/10, diagnose-gridlock.mjs exits 0. Fixture: 0 of 3 stopped (was 3 of 7), 0.1s max wait (was 131s), 1.4% congestion (was 43%), 11 trips (was 8). Soak: 11 trips, 1% congestion, XP 35.1% (was 8 / 43% / 25.5%). Mutation: reverting the exemption fails 1 test; removing the anti-gridlock check fails 1 test."
     }
   ],
   "trackedGaps": [
-    {
-      "id": "GAP-loop-gridlock",
-      "summary": "Vehicles deadlock in a small city. Reduced but NOT eliminated by S01.5: topology repair took the soak fixture from 8/8 stopped (69s max wait, 92% congestion) to 3/7 stopped, and city congestion from 94% to 43%.",
-      "discoveredIn": "S01.4",
-      "reproducer": "node scripts/diagnose-gridlock.mjs -> exits 1 and prints per-edge congestion plus per-vehicle wait.",
-      "rootCause": "CORRECTED in S01.5. My earlier claim that malformed addRoad topology was the primary cause was only partly right: fixing it removed the degree-6 hub and roughly halved the deadlock, but a deadlock remains on a CLEAN degree-2 ring. The residual cause is MUTUAL YIELDING AT A DEGREE-2 NODE, which is a bend, not an intersection. In the fixture, car 7 (on e8 dir -1, wanting e23) and car 10 (on e23 dir 1, wanting e8) both stop 1.5 wu short of the same node and each waits for the other: car 10 is held by the yield-to-the-right scan (e8 counts as coming from its right, cars 7/8 within 60 wu at under 3 wu/s) and car 7 is held by the occupied-intersection-zone check (car 10 within 10 wu of the node on a crossing axis). Neither branch is appropriate when node.edges.size === 2.",
-      "impact": "Gameplay-breaking for small cities. Previously INVISIBLE because the broken congestion metric reported about 2% while every vehicle was stopped (EVIDENCE E03). The metric fix in S01.4 is what made it observable.",
-      "fixOwner": "S04.2 (connector reservations), acceptance gate S04.6. Do NOT band-aid in S01.5/S01.6: S04.2 replaces the yielding model, so a guard here would be discarded and could mask the real fix.",
-      "actionWhenFixed": "scripts/diagnose-gridlock.mjs must exit 0 and the soak must show no vehicle waiting more than a few seconds in the four-building fixture. A degree-2 exemption is the likely minimal fix but belongs with the connector-reservation work.",
-      "evidence": "EVIDENCE.md E14"
-    },
     {
       "id": "GAP-pending-returns-not-saved",
       "summary": "Economy.toJSON() omits _pendingReturns, cancelledReturns and cancellationReasons, so saving during the dwell loses the queued return trip. No crash or corruption; the trip is simply lost.",
@@ -1016,6 +1012,14 @@
       "fix": "addRoad samples the whole control path once and segments it at real junctions and endpoints only, slicing the sampled polyline instead of re-splicing repeated control prefixes. A path returning to its own start reuses the first station node.",
       "verification": "Soak loop is now 4 edges / 4 nodes all degree 2 (was 6 edges, degree-6 hub, duplicate coincident nodes). One-call loop matches four-call topology. Mutation fails 2 tests.",
       "evidence": "EVIDENCE.md E12"
+    },
+    {
+      "id": "GAP-loop-gridlock",
+      "closedBy": "S01.5b",
+      "summary": "Vehicles deadlocked in a small city: 3 of 7 stopped, 131s max wait, congestion climbing to 43% in the four-building soak fixture.",
+      "fix": "A degree-2 node is a BEND, not an intersection. _mustYield exempts degree-2 nodes from the cross-traffic yield logic (occupied-zone check and yield-to-the-right scan), which at a corner fired in both directions because the two edges have different axes so _crosses() is always true. The anti-gridlock check is deliberately NOT exempted, since it prevents rear-ending a stopped car across an edge boundary where per-lane car following cannot see it.",
+      "verification": "Diagnostic exits 0: 0 of 3 stopped, 0.1s max wait, 1.4% congestion, 11 trips (was 8). Soak shows 11 trips and 1% congestion with XP 35.1% (was 8 trips, 43%, 25.5%). Unit 189/189, browser 10/10. Mutation-verified: reverting the exemption fails 1 test, removing the anti-gridlock check fails 1 test.",
+      "evidence": "EVIDENCE.md E14"
     }
   ]
 }
