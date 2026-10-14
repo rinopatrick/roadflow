@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   startServer, launchGame, runDir, dismissHelp,
-  openCategory, selectTool, toolCategories, worldState,
+  openCategory, selectTool, toolCategories, menuAction, worldState,
 } from './harness.js';
 import { ICONS, icon, REQUIRED_ICON_IDS } from '../../src/icons.js';
 import { UI_TOKENS } from '../../src/uiTokens.js';
@@ -997,6 +997,45 @@ test('ui: sound starts on, toggles visibly, and makes no audio before a gesture'
     await page.keyboard.press('Enter');
     assert.ok(await page.evaluate(() => window.__audioContexts) > 0,
       'unmuting and then acting should be able to make sound');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: a loaded save leaves the sound control showing the saved state', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+
+    const sound = () => page.evaluate(() => ({
+      pressed: document.getElementById('soundbtn').getAttribute('aria-pressed'),
+      label: document.getElementById('soundbtn').getAttribute('aria-label'),
+      audio: window.__rf.world.settings.audio,
+    }));
+
+    assert.equal((await sound()).audio, true, 'sound starts on');
+
+    // Mute, then save that preference.
+    await page.click('#soundbtn');
+    assert.equal((await sound()).audio, false, 'the mute must reach the world');
+    await menuAction(page, 'btnSave');
+    await page.waitForTimeout(200);
+
+    // Unmute in this session, so the live setting differs from the saved one.
+    await page.click('#soundbtn');
+    assert.equal((await sound()).audio, true, 'the unmute must reach the world');
+
+    // Loading the save must restore BOTH the setting and the control that shows it.
+    await menuAction(page, 'btnLoad');
+    await page.waitForFunction(() => window.__rf.world.settings.audio === false, null, { timeout: 10000 });
+
+    const after = await sound();
+    assert.equal(after.audio, false, 'the loaded preference must be applied');
+    assert.equal(after.pressed, 'false',
+      'the sound control must show the loaded state, not the state it had before the load');
+    assert.equal(after.label, 'Sound off',
+      `the control label must follow the loaded state, got "${after.label}"`);
   } finally {
     await run.close();
   }

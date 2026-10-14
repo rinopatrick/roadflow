@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { createIdSource } from '../src/core.js';
 import { RoadNetwork } from '../src/roadNetwork.js';
 import { Economy } from '../src/economy.js';
+import { TrafficSim } from '../src/traffic.js';
 import {
   LAYERS, LAYER_IDS, TRAFFIC_BANDS, ACCESS_STATE,
   trafficBand, trafficOverlay, accessOverlay, accessSummary, nextOverlay,
@@ -198,6 +199,95 @@ test('an unknown overlay id is refused rather than stored', () => {
     'a layer with no data source must not become active');
   assert.equal(nextOverlay(null, 'pollution'), null);
   assert.equal(nextOverlay('access', undefined), 'access');
+});
+
+// ---------- reachability of the upper bands ----------
+
+/**
+ * Drives the REAL simulation to a standstill and returns the network.
+ *
+ * The thresholds in TRAFFIC_BANDS are only meaningful if actual traffic can
+ * reach them. Writing `_congestion` by hand would prove nothing about the
+ * bands: it would test the comparison against a number the test itself chose.
+ */
+function jammedNetwork() {
+  const net = new RoadNetwork();
+  const built = net.addRoad([[0, 0], [600, 0]], 'street');
+  const edge = net.edges.get(built.edgeIds[0]);
+  const sim = new TrafficSim(net, { seed: 1 });
+
+  // One vehicle held still is enough: congestion is the share of vehicles on the
+  // edge that are stopped, so a lone stopped car is a 1.0 share. Spawning more
+  // would be refused anyway — `_blockedAtSpawn` will not stack vehicles.
+  assert.ok(sim.spawn(edge.a, edge.b), 'fixture must spawn a car');
+  sim._desiredSpeed = () => 0;
+  for (let i = 0; i < 60 * 60; i++) sim.update(1 / 60);
+  return { net, edge, sim };
+}
+
+test('real stopped traffic reaches the upper bands, so they are not dead UI', () => {
+  const { net, edge } = jammedNetwork();
+
+  assert.ok(edge._congestion > 0.8,
+    `a fully stopped edge must pass the top threshold; congestion was ${edge._congestion}`);
+  assert.ok(edge._carCount > 0, 'the fixture must leave vehicles on the edge');
+
+  const rows = trafficOverlay(net);
+  assert.equal(rows.length, 1, 'the jammed edge must appear exactly once');
+  assert.equal(rows[0].level, TRAFFIC_BANDS.length - 1,
+    `a standstill must report the top band, got level ${rows[0].level}`);
+  assert.equal(rows[0].label, TRAFFIC_BANDS[TRAFFIC_BANDS.length - 1].label);
+  assert.equal(rows[0].tone, TRAFFIC_BANDS[TRAFFIC_BANDS.length - 1].tone);
+});
+
+test('every band is reachable by some congestion value in 0..1', () => {
+  // A band whose threshold sits above what the simulation can produce would be
+  // an unreachable legend row. Sweep the range the EMA can actually output.
+  const reached = new Set();
+  for (let c = 0; c <= 1.0001; c += 0.01) reached.add(trafficBand(c).level);
+  assert.deepEqual([...reached].sort((a, b) => a - b),
+    TRAFFIC_BANDS.map(b => b.level),
+    'every declared band must be reachable from a real congestion value');
+});
+
+test('the top band threshold is inside what the simulation can produce', () => {
+  const { edge } = jammedNetwork();
+  const top = TRAFFIC_BANDS[TRAFFIC_BANDS.length - 1];
+  assert.ok(top.min <= edge._congestion,
+    `the jammed threshold ${top.min} must be reachable; a standstill produced ${edge._congestion}`);
+});
+
+test('a jammed edge carries a stopped-vehicle count, not just a colour', () => {
+  const { net } = jammedNetwork();
+  const rows = trafficOverlay(net);
+  assert.equal(rows.length, 1, 'the jammed edge must appear exactly once');
+  assert.ok(rows[0].cars > 0,
+    'the row must carry the vehicle count, because DESIGN requires a number and not colour alone');
+});
+
+test('the traffic overlay reports the intermediate bands as congestion decays', () => {
+  // A jam that clears must pass back down through the bands, so the middle
+  // legend rows describe something real rather than a threshold nobody hits.
+  const net = new RoadNetwork();
+  const built = net.addRoad([[0, 0], [600, 0]], 'street');
+  const edge = net.edges.get(built.edgeIds[0]);
+  const sim = new TrafficSim(net, { seed: 1 });
+  sim.spawn(edge.a, edge.b);
+  sim._desiredSpeed = () => 0;
+  for (let i = 0; i < 60 * 30; i++) sim.update(1 / 60);
+  assert.ok(edge._congestion > 0.9, 'fixture must start jammed');
+
+  // Clear the road and let the EMA settle through the lower thresholds.
+  sim._desiredSpeed = () => 30;
+  const seen = new Set();
+  for (let i = 0; i < 60 * 40; i++) {
+    sim.update(1 / 60);
+    seen.add(trafficBand(edge._congestion).level);
+  }
+  for (const band of TRAFFIC_BANDS) {
+    assert.ok(seen.has(band.level),
+      `band ${band.level} (${band.label}) was never observed while the jam cleared; saw ${[...seen].join(',')}`);
+  }
 });
 
 // ---------- shared metric ----------
