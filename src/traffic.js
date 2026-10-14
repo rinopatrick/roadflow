@@ -286,8 +286,12 @@ export class TrafficSim {
       return Math.min(distToEnd, 6);
     }
 
-    // plain intersection: yield to the right & to occupied zone
-    if (node.edges.size <= 1) return null;
+    // plain intersection: yield to the right & to occupied zone.
+    // A degree-2 node is a BEND, not an intersection: there is no cross traffic
+    // to yield to. Applying the occupied-zone check there makes two opposing
+    // cars on a two-way road wait for each other forever, because at a corner
+    // the two edges have different axes so _crosses() is always true.
+    if (node.edges.size <= 2) return null;
     // occupied intersection zone check
     for (const other of this.cars.values()) {
       if (other === car || other.dead) continue;
