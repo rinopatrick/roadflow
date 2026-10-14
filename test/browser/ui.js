@@ -1482,6 +1482,16 @@ test('ui: captures the HiDPI and wide layouts', async () => {
       const tag = `${vp.name}-seed1`;
       await page.screenshot({ path: `${shots}/ui-${tag}-full.png` });
 
+      // The backing store is sized from `clientWidth * dpr`, and layout applies
+      // the device scale factor asynchronously, so assert it after it settles
+      // rather than racing it. This was an intermittent failure before the wait.
+      await page.waitForFunction((dpr) => {
+        const c = document.getElementById('game');
+        return window.__rf.renderer.view().dpr === dpr
+          && c.width === c.clientWidth * dpr
+          && c.height === c.clientHeight * dpr;
+      }, vp.dpr, { timeout: 10000 });
+
       const metrics = await page.evaluate(() => {
         const v = window.__rf.renderer.view();
         const canvas = document.getElementById('game');

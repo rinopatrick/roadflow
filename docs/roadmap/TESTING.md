@@ -85,9 +85,16 @@ Two rules follow:
 
 ### Pitfall: an incomplete mutation looks like a weak test
 
-Mutation N of S02.4a removed the minimum-span clamp from `fitBounds`'s X axis and came back NO FAILURE. The clamp is enforced **per axis**, so the Y axis compensated and the zoom never changed. Mutating both axes, or the Y axis alone, failed as required.
+Mutation N of S02.4a removed the minimum-span clamp from `fitBounds`'s X axis and came back NO FAILURE. The clamp is enforced **per axis** and the fit takes the smaller of the two axis ratios, so:
 
-Before concluding that a test is weak, check whether the mutation actually changed behaviour. The harness supports multi-part mutations via a `parts` array for this case. This is distinct from S02.3a, where two mutations really were redundant and were proven so by deleting the branches.
+- in **landscape** (width >= height) the Y axis decides the zoom, and removing X's clamp changes nothing — a genuine no-op
+- in **portrait** (width < height) the X axis decides, and removing its clamp changes the zoom
+
+Every viewport we tested was landscape, so the X-axis clamp was unobservable. It is **not** dead code: DESIGN section 1 names 768x1024, and portrait is the only orientation where it is load-bearing. The fix was to add a portrait fixture, after which the X-only mutation fails as required.
+
+So before concluding a test is weak, ask **which input makes the mutated line observable**. If the answer is "none of our fixtures", the suite has a coverage gap rather than a weak assertion. The harness supports multi-part mutations via a `parts` array when several lines must change together.
+
+This is distinct from S02.3a, where two mutations really were redundant for every input and were proven so by deleting the branches.
 
 ### Pitfall: a round stroke cap at a junction IS the circular disk
 
@@ -169,7 +176,7 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node scripts/contact-sheet.mjs` | S02.3b | **Created.** Review artifact: the twelve DESIGN section 3 scenes at 1440x900, frozen clock, each asserted non-empty. Inspect the images |
 | `node scripts/mutate-s023b.mjs` | S02.3b | Mutation harness for the S02.3b guards (12 mutations, 12 caught after three ineffective targets exposed test gaps that were then fixed) |
 | `node --test test/camera.test.js` | S02.4a | **Created.** Projection round trip at five view descriptions and five zooms, device/CSS relationship, zoom clamping, pointer-anchored zoom, world bounds, fit framing with margin and minimum span, starter-region determinism/buildability/ordering/fallback. Pure, no canvas |
-| `node scripts/mutate-s024a.mjs` | S02.4a | Mutation harness for the S02.4a guards (21 mutations, 21 caught; supports multi-part mutations) |
+| `node scripts/mutate-s024a.mjs` | S02.4a | Mutation harness for the S02.4a guards (22 mutations, 22 caught; supports multi-part mutations) |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |

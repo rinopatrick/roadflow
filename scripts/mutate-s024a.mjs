@@ -108,6 +108,16 @@ const MUTATIONS = [
     to: '  const spanY = bounds.maxY - bounds.minY;',
   },
   {
+    // Observable only in a PORTRAIT viewport: the fit takes the smaller of the
+    // two axis ratios, so in landscape the Y axis decides and removing X's clamp
+    // changes nothing. This mutation is what originally came back NO FAILURE,
+    // and it stayed invisible until a portrait fixture was added.
+    name: 'N3: fit ignores the minimum span on the X axis only',
+    file: 'src/camera.js',
+    from: '  const spanX = Math.max(bounds.maxX - bounds.minX, minSpanWu);',
+    to: '  const spanX = bounds.maxX - bounds.minX;',
+  },
+  {
     name: 'O: fit does not clamp the zoom',
     file: 'src/camera.js',
     from: '  const zoom = clampZoom(Math.min(view.width / paddedX, view.height / paddedY));',

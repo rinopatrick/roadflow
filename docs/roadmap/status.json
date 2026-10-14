@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.4a",
+  "nextTask": "S02.4b",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1061,7 +1061,7 @@
     },
     {
       "id": "S02.4a",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.3b"
       ],
@@ -1102,6 +1102,11 @@
           "exitCode": 0,
           "result": "Adds the matrix S02.4 owns: desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2, and wide 1920x1080 at DPR 1, each with a small avenue loop built through the real controls and framed with Fit. Each asserts the renderer reads the right DPR, the backing store is CSS size x DPR, and the top band, dock and layer toggles all stay on screen. Inspected: the DPR 2 capture is crisp (markings, casing and UI text all sharp, no upscaling), and the 1920x1080 capture frames the loop correctly with the UI anchored to the viewport edges rather than the content.",
           "artifact": "artifacts/after-s02.4a"
+        },
+        {
+          "command": "operator approval of S02.4a",
+          "exitCode": 0,
+          "result": "APPROVED. Operator reviewed the DPR 2 and 1920x1080 captures and the DPR fix, and instructed work to continue. S02.4b is now eligible."
         }
       ],
       "notes": [
@@ -1112,7 +1117,8 @@
         "Fit framing applies the minimum span BEFORE the margin, so the margin stays a true proportion of what is actually framed, and clamps the result through clampZoom so an enormous extent cannot produce a wild value.",
         "The DPR2 and wide-layout captures are now part of the standing capture pass, which is what S02.4 owns (TESTING.md section 6: 'DPR1/2 on camera/road/input tasks; 1920x1080 for wide layout'). They assert geometry rather than only producing images: the backing store must be CSS size x DPR, and the band, dock and layer toggles must stay on screen.",
         "Deliberately deferred to S02.4b: cached terrain chunks with a bounded LRU, shoreline and rock contour accents, and the three building silhouette variants with entry orientation and save/load stability. Those are a coupled rendering change to the terrain and building passes and do not belong in the same diff as a camera correctness fix.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 350/350, npm run test:browser 53/53, soak 10 trips, 21/21 mutations caught."
       ]
     },
     {

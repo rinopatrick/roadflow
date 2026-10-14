@@ -32,6 +32,11 @@ const VIEWS = [
   view(1024, 768, 1),
   view(1024, 768, 2),
   view(1920, 1080, 2),
+  // Portrait, which DESIGN section 1 names ("At 768x1024 allow collapsed
+  // panels"). It is also the only orientation where the X axis decides the fit
+  // zoom, so without it the X-axis minimum-span clamp is unobservable.
+  view(768, 1024, 1),
+  view(768, 1024, 2),
 ];
 const ZOOMS = [MIN_ZOOM, 0.35, 1, 3, MAX_ZOOM];
 
@@ -195,15 +200,36 @@ test('fit framing leaves the configured margin around the content', () => {
     `expected the content to occupy about ${expected} of the viewport, got ${usedFraction}`);
 });
 
-test('fit framing enforces a minimum span, so one building is not zoomed to the pixel', () => {
+test('fit framing enforces a minimum span on BOTH axes', () => {
   const tiny = { minX: 10, minY: 10, maxX: 12, maxY: 12 };
-  const v = view(1440, 900, 1);
-  const cam = fitBounds(tiny, v);
-  assert.ok(cam.zoom <= MAX_ZOOM, `zoom must stay within range, got ${cam.zoom}`);
-  // The minimum span must be visible, which bounds the zoom from above.
-  const maxAllowed = Math.min(v.width, v.height) / DEFAULT_FIT.minSpanWu;
-  assert.ok(cam.zoom <= maxAllowed + 1e-9,
-    `a 2wu building must not zoom past the minimum span: zoom ${cam.zoom}, cap ${maxAllowed}`);
+  const pad = DEFAULT_FIT.minSpanWu * (1 + 2 * DEFAULT_FIT.margin);
+
+  // The clamp is enforced PER AXIS and the fit takes the smaller of the two
+  // ratios, so a landscape viewport is decided by the Y axis and cannot observe
+  // the X-axis clamp at all. Asserting the exact zoom across orientations pins
+  // both axes: a portrait viewport is decided by X, a landscape one by Y.
+  const orientations = [view(1440, 900, 1), view(1024, 768, 1), view(900, 900, 1), view(768, 1024, 1)];
+  for (const v of orientations) {
+    const cam = fitBounds(tiny, v);
+    assert.ok(cam.zoom <= MAX_ZOOM, `${v.width}x${v.height}: zoom must stay within range, got ${cam.zoom}`);
+
+    const expected = Math.min(v.width / pad, v.height / pad);
+    assert.ok(Math.abs(cam.zoom - expected) < 1e-9,
+      `${v.width}x${v.height}: a 2wu building must be framed at the minimum-span zoom `
+      + `${expected}, got ${cam.zoom}`);
+
+    // And the minimum span must actually be visible on both axes.
+    const [x0] = worldToCss(cam, v, tiny.minX, tiny.minY);
+    const [x1] = worldToCss(cam, v, tiny.minX + DEFAULT_FIT.minSpanWu, tiny.minY);
+    assert.ok(Math.abs((x1 - x0) - DEFAULT_FIT.minSpanWu * cam.zoom) < 1e-9,
+      `${v.width}x${v.height}: the minimum span must project at the fit zoom`);
+  }
+
+  // Both orientations must be genuinely exercised, or this test is vacuous.
+  const portrait = view(768, 1024, 1);
+  assert.ok(portrait.width < portrait.height, 'the portrait fixture must be taller than it is wide');
+  const landscape = view(1440, 900, 1);
+  assert.ok(landscape.width > landscape.height, 'the landscape fixture must be wider than it is tall');
 });
 
 test('fit framing clamps at the zoom limits rather than returning a wild value', () => {
