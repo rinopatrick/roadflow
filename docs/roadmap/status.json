@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.1",
+  "nextTask": "S02.2",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -725,7 +725,7 @@
     },
     {
       "id": "S02.1",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S01.7"
       ],
@@ -772,6 +772,12 @@
           "exitCode": 0,
           "result": "63 artifacts: 60 tool-state captures (10 tools x active/hover/focus x desktop 1440x900 and compact 1024x768), 2 full-page captures and 1 inspector capture. Clock frozen at speed 0 so captures are comparable; file names carry scene, viewport, DPR and seed. Inspected: dock unclipped at 1024x768 (was 163px of overflow before), focus ring visible on every tool, depleted House badge legible, inspector shows icon + 'House' with 'Reach shop: No'.",
           "artifact": "artifacts/after-s02.1"
+        },
+        {
+          "command": "operator approval of the icon language and base tokens",
+          "exitCode": 0,
+          "result": "APPROVED. Operator reviewed the before/after full-page captures (artifacts/before-s02.1 vs artifacts/after-s02.1, desktop 1440x900 seed 1) and the tool-state captures, and accepted the token set including the --accent change from cyan #2bb8e8 to teal #146b68. This closes the stage's Approval clause, which was the only reason the task was held at in_progress. Approval is of the icon language and base tokens specifically; the DESIGN.md section 7 rubric score remains the R1 gate at S02.6 and was not claimed here.",
+          "artifact": "artifacts/after-s02.1"
         }
       ],
       "notes": [
@@ -780,7 +786,8 @@
         "Preserved on purpose: the 10 tools and their 1-0 shortcuts, every data-tool and data-speed value, badge ids, all DOM ids listed in CONTRACTS.md section 1, and all gameplay data. Nothing in the simulation was touched.",
         "Two scope notes. (i) The plan's optional icon ids: save, load, close and help were added for existing controls; undo and layers were NOT added because no such control exists yet, and DESIGN.md section 1 forbids an inert future button. (ii) --line against the map grass measures 1.34:1. It is reported as informational rather than gated, because the 1px panel edge is decorative and the panel boundary is carried by the drop shadow; flagged for the human visual review.",
         "Deferred to its owning task: visible speed labels Pause/1x/3x/8x are S02.2 item 4 (S02.1 gives them non-emoji aria-labels only), and the layer toggles with legends are S02.2 item 3. The compact dock now fits by tightening padding at <=1100px rather than by hiding tools.",
-        "STATUS: implementation and every required check in the task's Verify line pass. The task remains in_progress for one reason only - the stage's Approval clause (operator sign-off on the icon language and the base tokens) is not yet recorded, and the stage says not to accept screenshot differences automatically. S02.2 must not start until that sign-off is entered here. The full DESIGN.md section 7 rubric score belongs to the R1 gate at S02.6."
+        "STATUS: implementation and every required check in the task's Verify line pass. The task remains in_progress for one reason only - the stage's Approval clause (operator sign-off on the icon language and the base tokens) is not yet recorded, and the stage says not to accept screenshot differences automatically. S02.2 must not start until that sign-off is entered here. The full DESIGN.md section 7 rubric score belongs to the R1 gate at S02.6.",
+        "CLOSED. Re-verified after the approval decision: npm test 265/265 and npm run test:browser 30/30, zero failures. S02.2 is now eligible; it must not re-litigate these tokens, only build on them."
       ]
     },
     {
