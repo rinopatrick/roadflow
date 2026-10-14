@@ -73,6 +73,57 @@ html, body {
 
 .icon { flex: none; display: block; width: 20px; height: 20px; }
 
+/* ---- Analytic layers: labelled toggles, plus the legend for the active one ---- */
+#layers {
+  position: absolute; top: calc(var(--gap) + var(--band-h) + var(--gap)); left: var(--gap);
+  z-index: 10; display: flex; flex-direction: column; gap: var(--space-2);
+  max-width: 296px;
+}
+#layers h3 {
+  display: flex; align-items: center; gap: var(--space-1);
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+#layerbtns {
+  display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1);
+  background: var(--surface-veil); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-raised);
+  align-self: flex-start;
+}
+.layer-btn {
+  display: flex; align-items: center; gap: var(--space-1);
+  min-height: var(--control-min); padding: 0 var(--space-2);
+  border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent;
+  color: var(--muted); font-family: inherit; font-size: 14px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  transition: background .12s ease-out, color .12s ease-out, border-color .12s ease-out;
+}
+.layer-btn:hover { background: var(--hover); color: var(--ink); }
+.layer-btn.active { background: var(--accent); border-color: var(--accent); color: var(--surface-raised); }
+.layer-btn.active:hover { background: var(--accent); color: var(--surface-raised); }
+#layerlegend {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  background: var(--surface-raised); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: var(--shadow);
+  padding: var(--space-2) var(--space-3); max-width: 296px;
+}
+.legend-block { display: flex; flex-direction: column; gap: 3px; }
+.legend-block h4 { font-size: 12px; font-weight: 600; color: var(--ink); }
+.legend-row { display: flex; align-items: center; gap: var(--space-2); font-size: 12px; }
+.legend-label { color: var(--ink); }
+.legend-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend-swatch {
+  flex: none; width: 22px; height: 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+/* Swatch tones mirror the map palette so the legend and the overlay agree. */
+.tone-calm { background: rgba(20, 107, 104, 0.45); }
+.tone-busy { background: rgba(138, 81, 8, 0.55); }
+.tone-heavy { background: rgba(190, 94, 18, 0.66); }
+.tone-jammed { background: rgba(163, 48, 54, 0.72); }
+.tone-reachable { background: rgba(20, 107, 104, 0.22); border-color: var(--accent); }
+.tone-unreachable { background: rgba(163, 48, 54, 0.35); border-color: var(--danger); }
+
 /* ---- Top status band: one grouped surface, not a pill per action ---- */
 #topband {
   position: absolute; top: var(--gap); left: var(--gap); right: var(--gap);
@@ -267,6 +318,9 @@ html, body {
   .cat-btn, .tool-btn { padding: 0 var(--space-2); gap: var(--space-1); }
   /* The inspector becomes a sheet flush to the right edge, still clear of the dock. */
   #inspect { right: 0; border-radius: var(--radius-lg) 0 0 var(--radius-lg); }
+  /* The legend would collide with the dock; keep the toggles, drop the panel. */
+  #layers { max-width: 220px; }
+  #layerlegend { max-width: 220px; }
 }
 
 /* ---- Non-essential motion off ---- */

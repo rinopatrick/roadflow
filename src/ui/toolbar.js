@@ -42,13 +42,20 @@ export function categoryOf(toolId) {
   return TOOLS.find(t => t.id === toolId)?.category ?? null;
 }
 
+/** Context-help text for the active tool. Replaced by the caller that owns stock. */
+let describe = defaultDescribe;
+
 /**
  * Builds the dock and keeps it in sync with the controller.
- * Returns nothing: the controller is the only way to change what is selected.
+ *
+ * @param {{describeTool?: (toolId: string) => string}} [options] `describeTool`
+ *   supplies the context-help line, so the caller that owns economy state can
+ *   explain an inventory shortfall without this module importing the economy.
  */
-export function buildToolbar() {
+export function buildToolbar({ describeTool } = {}) {
   const catBar = document.getElementById('categories');
   const subBar = document.getElementById('subtools');
+  describe = describeTool ?? defaultDescribe;
   catBar.innerHTML = '';
   subBar.innerHTML = '';
 
@@ -85,6 +92,10 @@ export function buildToolbar() {
 
   ui.subscribe(render);
   render(ui.snapshot());
+
+  // Inventory changes come from the economy, not from UI state, so the caller
+  // that owns the economy asks for a re-render when stock moves.
+  return { refresh: () => render(ui.snapshot()) };
 }
 
 /** Opens a category without changing the active tool. */
@@ -115,6 +126,11 @@ function render(state) {
   }
 
   const tool = TOOLS.find(t => t.id === state.activeTool);
-  document.getElementById('ctxhelp').textContent =
-    tool ? `${tool.label} — ${tool.hint}  (${tool.key})` : '';
+  document.getElementById('ctxhelp').textContent = tool ? describe(tool.id) : '';
+}
+
+/** Default context help: what the tool does, and its shortcut. */
+function defaultDescribe(toolId) {
+  const tool = TOOLS.find(t => t.id === toolId);
+  return tool ? `${tool.label} — ${tool.hint}  (${tool.key})` : '';
 }

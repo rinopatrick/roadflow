@@ -29,16 +29,26 @@
         <button class="spd-btn" data-speed="3" aria-label="3x speed" title="Fast speed">3×</button>
         <button class="spd-btn" data-speed="8" aria-label="8x speed" title="Ultra speed">8×</button>
       </div>
+      <button class="icon-btn" id="soundbtn" aria-pressed="true" title="Sound on"></button>
       <button class="icon-btn" id="menubtn" data-icon="menu" aria-label="Menu"
               aria-haspopup="true" aria-expanded="false" title="Save, load and city options"></button>
       <div id="menupop" hidden>
         <button class="menu-btn" id="btnSave" data-icon="save">Save</button>
         <button class="menu-btn" id="btnLoad" data-icon="load">Load</button>
+        <button class="menu-btn" id="btnExport" data-icon="exportFile">Export city…</button>
+        <button class="menu-btn" id="btnImport" data-icon="importFile">Import city…</button>
         <button class="menu-btn" id="btnRecover" hidden title="Restore the previous save">Recover</button>
         <button class="menu-btn" id="btnNew">New map</button>
         <button class="menu-btn" id="btnHelp" data-icon="help" aria-label="Help" title="Controls and keys"></button>
       </div>
     </div>
+  </div>
+
+  <!-- Analytic layers: labelled toggles plus the legend for the active one. -->
+  <div id="layers">
+    <h3 data-icon="layers">Layers</h3>
+    <div id="layerbtns"></div>
+    <div id="layerlegend" hidden></div>
   </div>
 
   <!-- Context help sits above the dock; the dock itself is one quiet surface. -->
@@ -70,6 +80,10 @@
         <b>Fix jams</b> with roundabouts and fully-customizable traffic lights.<br>
         Happy, well-connected citizens level up your city and grant more buildings.
       </p>
+      <p style="margin-top:10px">
+        <b>Layers</b> show the traffic on each road, or which buildings can actually
+        reach the road network. One at a time; click again to go back to the plain map.
+      </p>
       <p style="margin-top:10px; color:var(--muted)">
         <kbd>Drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>1-9</kbd> tools · <kbd>Space</kbd> pause ·
         <kbd>Esc</kbd> cancel · <kbd>Del</kbd>/<kbd>right-click</kbd> bulldoze mode
@@ -77,6 +91,9 @@
       <button id="helpClose">Let's build</button>
     </div>
   </div>
+
+  <!-- Import target. Hidden; opened by the menu's Import action. -->
+  <input type="file" id="importfile" accept="application/json,.json" hidden>
 
   <script>
     window.addEventListener('error', e => {

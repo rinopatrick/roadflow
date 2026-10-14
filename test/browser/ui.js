@@ -13,6 +13,7 @@
 // clock paused so a capture is reproducible.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   startServer, launchGame, runDir, dismissHelp,
   openCategory, selectTool, toolCategories, worldState,
@@ -277,7 +278,7 @@ test('ui: the icon map covers every control S02.1 renders', () => {
 
 test('ui: no control depends on emoji', async () => {
   const { page } = game;
-  const zones = ['#topband', '#toolbar', '#speedctl', '#menupop', '#inspect', '#help'];
+  const zones = ['#topband', '#toolbar', '#speedctl', '#menupop', '#inspect', '#help', '#layers'];
   for (const zone of zones) {
     const html = await page.$eval(zone, el => el.outerHTML);
     assert.ok(!EMOJI.test(html), `${zone} still contains emoji: ${html.match(EMOJI)?.[0]}`);
@@ -745,7 +746,7 @@ test('ui: clicking interface chrome never reaches the canvas', async () => {
   await selectTool(page, 'road');
   const before = await worldState(page);
 
-  for (const selector of ['#topband', '#categories', '#toolbar']) {
+  for (const selector of ['#topband', '#categories', '#toolbar', '#layers h3']) {
     const box = await page.locator(selector).boundingBox();
     if (!box) continue;
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -758,6 +759,406 @@ test('ui: clicking interface chrome never reaches the canvas', async () => {
   assert.equal(after.pop, before.pop, 'interface chrome must not place buildings');
   assert.equal(await page.evaluate(() => window.__rf.draftLength), 0,
     'interface chrome must not start a road draft');
+  assert.equal(await page.evaluate(() => window.__rf.ui.overlay), null,
+    'clicking chrome must not toggle a layer');
+});
+
+// ---------- S02.2b: layers, sound, import/export, depletion ----------
+
+test('ui: the layer control offers only layers backed by simulated data', async () => {
+  const { page } = game;
+  const ids = await page.$$eval('[data-layer]', els => els.map(e => e.dataset.layer));
+  assert.deepEqual(ids, ['traffic', 'access'], `layer toggles were: ${ids.join(', ')}`);
+
+  const rows = await page.$$eval('[data-layer]', els => els.map(e => ({
+    id: e.dataset.layer,
+    label: e.querySelector('.label')?.textContent?.trim() ?? '',
+    hasIcon: !!e.querySelector('svg[aria-hidden="true"]'),
+    pressed: e.getAttribute('aria-pressed'),
+  })));
+  for (const r of rows) {
+    assert.ok(r.label, `${r.id}: a layer toggle keeps visible text, not only a swatch`);
+    assert.ok(r.hasIcon, `${r.id}: renders an inline svg icon`);
+    assert.equal(r.pressed, 'false', `${r.id}: must start off`);
+  }
+
+  // The renderer must not carry a pollution overlay any more: it drew invented
+  // values around factories with no simulated field behind them.
+  const rendererSurface = await page.evaluate(() => {
+    const r = window.__rf.renderer;
+    return {
+      drawPollution: typeof r._drawPollution,
+      showPollution: 'showPollution' in r,
+      showCongestion: 'showCongestion' in r,
+    };
+  });
+  assert.equal(rendererSurface.drawPollution, 'undefined', '_drawPollution must be deleted');
+  assert.equal(rendererSurface.showPollution, false, 'the showPollution flag must be deleted');
+  assert.equal(rendererSurface.showCongestion, false,
+    'overlay state must live in the controller, not in renderer flags');
+});
+
+test('ui: one analytic layer at a time, with its labelled legend', async () => {
+  const { page } = game;
+  const legendHidden = () => page.evaluate(() => document.getElementById('layerlegend').hidden);
+  assert.equal(await legendHidden(), true, 'no legend until a layer is on');
+
+  await page.click('[data-layer="traffic"]');
+  let state = await page.evaluate(() => ({
+    overlay: window.__rf.ui.overlay,
+    pressed: [...document.querySelectorAll('[data-layer][aria-pressed="true"]')].map(e => e.dataset.layer),
+    visibleLegend: [...document.querySelectorAll('[data-legend]')]
+      .filter(e => !e.hidden).map(e => e.dataset.legend),
+    labels: [...document.querySelectorAll('[data-legend="traffic"] .legend-label')].map(e => e.textContent.trim()),
+    swatches: document.querySelectorAll('[data-legend="traffic"] .legend-swatch').length,
+  }));
+  assert.equal(state.overlay, 'traffic', 'the controller must own the active layer');
+  assert.deepEqual(state.pressed, ['traffic'], 'exactly one toggle may be pressed');
+  assert.deepEqual(state.visibleLegend, ['traffic'], 'only the active layer shows a legend');
+  assert.ok(state.labels.length >= 2, `the traffic legend needs labelled bands, got ${state.labels.length}`);
+  assert.equal(state.swatches, state.labels.length, 'every band needs a swatch');
+
+  await page.click('[data-layer="access"]');
+  state = await page.evaluate(() => ({
+    overlay: window.__rf.ui.overlay,
+    pressed: [...document.querySelectorAll('[data-layer][aria-pressed="true"]')].map(e => e.dataset.layer),
+    visibleLegend: [...document.querySelectorAll('[data-legend]')].filter(e => !e.hidden).map(e => e.dataset.legend),
+  }));
+  assert.equal(state.overlay, 'access', 'switching layers replaces the active one');
+  assert.deepEqual(state.pressed, ['access'], 'the previous layer must be released');
+  assert.deepEqual(state.visibleLegend, ['access']);
+
+  // Clicking the active layer again returns to the plain map.
+  await page.click('[data-layer="access"]');
+  state = await page.evaluate(() => ({
+    overlay: window.__rf.ui.overlay,
+    pressed: document.querySelectorAll('[data-layer][aria-pressed="true"]').length,
+  }));
+  assert.equal(state.overlay, null, 'the toggle must be able to turn itself off');
+  assert.equal(state.pressed, 0);
+  assert.equal(await legendHidden(), true, 'the legend goes with the layer');
+});
+
+test('ui: the traffic legend reports the same edges the overlay draws', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+
+    // A small city that will actually move traffic.
+    await page.keyboard.press('1');
+    await page.mouse.click(420, 400);
+    await page.mouse.click(820, 400);
+    await page.mouse.click(820, 560);
+    await page.mouse.click(420, 560);
+    await page.mouse.click(420, 400);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('6');
+    await page.mouse.click(520, 340);
+    await page.mouse.click(720, 340);
+    await page.keyboard.press('7');
+    await page.mouse.click(720, 620);
+    await page.waitForTimeout(300);
+
+    await page.click('[data-speed="8"]');
+    await page.waitForFunction(() => window.__rf.state.traffic.cars.size > 0, null, { timeout: 30000 });
+    await page.waitForTimeout(1500);
+    await page.click('[data-speed="0"]');
+
+    await page.click('[data-layer="traffic"]');
+    await page.waitForTimeout(400);
+
+    const check = await page.evaluate(() => {
+      const net = window.__rf.state.net;
+      // The same rule src/layers.js applies: an edge is shown when it holds a
+      // vehicle or has accumulated congestion above the first band.
+      const expected = [...net.edges.values()]
+        .filter(e => (Number.isFinite(e._carCount) ? e._carCount : 0) > 0 || (e._congestion ?? 0) >= 0.25)
+        .length;
+      const shown = [...document.querySelectorAll('[data-legend="traffic"] .legend-count')]
+        .reduce((sum, el) => sum + (parseInt(el.textContent, 10) || 0), 0);
+      return { expected, shown, cars: window.__rf.state.traffic.cars.size };
+    });
+    assert.ok(check.cars > 0, 'fixture must put vehicles on the road');
+    assert.ok(check.expected > 0, 'fixture must congest at least one edge');
+    assert.equal(check.shown, check.expected,
+      `the legend must count the same edges the overlay draws (legend ${check.shown}, overlay ${check.expected})`);
+
+    await page.screenshot({ path: `${shots}/ui-layer-traffic-desktop-1440x900-seed1.png` });
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: the access layer reports real reachability', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // One house on its own: nothing to reach.
+    await page.keyboard.press('1');
+    await page.mouse.click(420, 400);
+    await page.mouse.click(820, 400);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('6');
+    await page.mouse.click(520, 340);
+    await page.waitForFunction(() => window.__rf.state.eco.buildings.size === 1, null, { timeout: 10000 });
+
+    await page.click('[data-layer="access"]');
+    await page.waitForTimeout(300);
+    let counts = await page.evaluate(() => ({
+      reachable: document.querySelector('[data-count="access-reachable"]').textContent,
+      unreachable: document.querySelector('[data-count="access-unreachable"]').textContent,
+      states: [...window.__rf.accessStates.values()].map(v => v.state),
+    }));
+    assert.equal(counts.states.length, 1, 'fixture must have exactly one building');
+    assert.equal(counts.states[0], 'unreachable', 'a lone building cannot reach anything');
+    assert.equal(counts.unreachable, '1', 'the legend must report the unreachable count');
+    assert.equal(counts.reachable, '0');
+
+    // Add a shop on the same road: now both ends can reach each other.
+    await page.keyboard.press('7');
+    await page.mouse.click(720, 340);
+    await page.waitForFunction(() => window.__rf.state.eco.buildings.size === 2, null, { timeout: 10000 });
+    await page.click('[data-speed="1"]');
+    await page.click('[data-speed="0"]');
+    await page.waitForTimeout(300);
+
+    counts = await page.evaluate(() => ({
+      reachable: document.querySelector('[data-count="access-reachable"]').textContent,
+      unreachable: document.querySelector('[data-count="access-unreachable"]').textContent,
+      states: [...window.__rf.accessStates.values()].map(v => v.state),
+    }));
+    assert.deepEqual(counts.states, ['reachable', 'reachable'],
+      'a road between them makes both buildings reachable');
+    assert.equal(counts.reachable, '2');
+    assert.equal(counts.unreachable, '0');
+
+    await page.screenshot({ path: `${shots}/ui-layer-access-desktop-1440x900-seed1.png` });
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: sound starts on, toggles visibly, and makes no audio before a gesture', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    // Count AudioContext construction so "no audio before user gesture" is
+    // measured rather than assumed.
+    await page.addInitScript(() => {
+      window.__audioContexts = 0;
+      const Real = window.AudioContext || window.webkitAudioContext;
+      if (!Real) return;
+      function Counted(...args) { window.__audioContexts++; return new Real(...args); }
+      Counted.prototype = Real.prototype;
+      window.AudioContext = Counted;
+      window.webkitAudioContext = Counted;
+    });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => !!window.__rf, null, { timeout: 20000 });
+    await dismissHelp(page);
+
+    const start = await page.evaluate(() => ({
+      created: window.__audioContexts,
+      pressed: document.getElementById('soundbtn').getAttribute('aria-pressed'),
+      label: document.getElementById('soundbtn').getAttribute('aria-label'),
+      hasIcon: !!document.getElementById('soundbtn').querySelector('svg'),
+    }));
+    assert.equal(start.created, 0,
+      'booting the game must not start an audio context; browsers block that and it is not a user gesture');
+    assert.equal(start.pressed, 'true', 'sound is on by default');
+    assert.equal(start.label, 'Sound on');
+    assert.ok(start.hasIcon, 'the sound control needs an icon');
+
+    await page.click('#soundbtn');
+    const muted = await page.evaluate(() => ({
+      pressed: document.getElementById('soundbtn').getAttribute('aria-pressed'),
+      label: document.getElementById('soundbtn').getAttribute('aria-label'),
+      audio: window.__rf.world.settings.audio,
+    }));
+    assert.equal(muted.pressed, 'false', 'the muted state must be visible, not inferred from silence');
+    assert.equal(muted.label, 'Sound off');
+    assert.equal(muted.audio, false, 'the mute must reach the world settings that a save carries');
+
+    // Muted: an interaction must still create no context.
+    await page.keyboard.press('1');
+    await page.mouse.click(500, 400);
+    await page.mouse.click(700, 400);
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => window.__audioContexts), 0,
+      'a muted game must not open an audio context at all');
+
+    await page.click('#soundbtn');
+    await page.mouse.click(800, 400);
+    await page.mouse.click(900, 400);
+    await page.keyboard.press('Enter');
+    assert.ok(await page.evaluate(() => window.__audioContexts) > 0,
+      'unmuting and then acting should be able to make sound');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: export produces a file and a bad import leaves the city alone', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    await page.keyboard.press('1');
+    await page.mouse.click(500, 400);
+    await page.mouse.click(760, 400);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+    const built = await worldState(page);
+
+    // Export must hand the player a real file. The menu action lives in the
+    // popover, so open it first.
+    await page.click('#menubtn');
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 10000 }),
+      page.click('#btnExport'),
+    ]);
+    const suggested = download.suggestedFilename();
+    assert.match(suggested, /\.json$/, `exported file should be JSON, got ${suggested}`);
+    const saved = await download.path();
+    const text = await readFile(saved, 'utf8');
+    const parsed = JSON.parse(text);
+    assert.ok(parsed.net, 'the exported snapshot must carry the graph');
+
+    // A garbage import must change nothing at all.
+    await page.setInputFiles('#importfile', {
+      name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('{ not json'),
+    });
+    await page.waitForTimeout(400);
+    const after = await worldState(page);
+    assert.deepEqual(after, built, 'a failed import must leave the city byte-for-byte as it was');
+
+    const toastText = await page.$$eval('#toasts .toast', els => els.map(e => e.textContent).join(' | '));
+    assert.match(toastText, /Import failed/i, `the player must be told, got: ${toastText}`);
+    assert.match(toastText, /unchanged/i, 'the message must say the city was not touched');
+
+    // A structurally valid but semantically wrong snapshot is also refused.
+    await page.setInputFiles('#importfile', {
+      name: 'wrong.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({ version: 2, net: { nodes: [], edges: [] }, eco: { batch: 'nope' } })),
+    });
+    await page.waitForTimeout(400);
+    assert.deepEqual(await worldState(page), built, 'an invalid snapshot must not replace the city');
+
+    // A genuine round trip does replace it, and reports success.
+    await page.setInputFiles('#importfile', {
+      name: 'good.json', mimeType: 'application/json', buffer: Buffer.from(text),
+    });
+    await page.waitForFunction(() => document.getElementById('toasts').textContent.includes('Imported'), null, { timeout: 10000 });
+    const restored = await worldState(page);
+    assert.equal(restored.edges, built.edges, 'a valid import must restore the same graph');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: a depleted tool explains why and how to progress', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.evaluate(() => { window.__rf.state.eco.batch.house = 0; });
+
+    await selectTool(page, 'house');
+    await page.waitForFunction(
+      () => document.getElementById('ctxhelp').textContent.includes('No houses left'),
+      null, { timeout: 5000 });
+
+    const help = await page.evaluate(() => document.getElementById('ctxhelp').textContent);
+    assert.match(help, /No houses left/, `the reason must be stated, got: ${help}`);
+    assert.match(help, /[Ll]evel/, `the progression link must be stated, got: ${help}`);
+    assert.match(help, /XP to go/, `the link must be concrete, got: ${help}`);
+    assert.ok(!EMOJI.test(help), 'the reason must not be an emoji');
+
+    // The tool stays usable, so the player can still try and be told why not.
+    assert.equal(await page.evaluate(() => document.querySelector('[data-tool="house"]').getAttribute('aria-pressed')), 'true',
+      'a depleted tool stays selectable so its reason is reachable');
+
+    // Placing consumes nothing, because there is nothing to consume.
+    const before = await page.evaluate(() => ({ ...window.__rf.state.eco.batch }));
+    await page.mouse.click(600, 400);
+    await page.waitForTimeout(200);
+    const after = await page.evaluate(() => ({ ...window.__rf.state.eco.batch }));
+    assert.deepEqual(after, before, 'a refused placement must not consume stock');
+
+    await page.screenshot({ path: `${shots}/ui-depleted-desktop-1440x900-seed1.png` });
+
+    // Restoring stock removes the warning rather than leaving it stale.
+    await page.evaluate(() => { window.__rf.state.eco.batch.house = 3; });
+    await page.click('[data-speed="1"]');
+    await page.click('[data-speed="0"]');
+    await page.waitForFunction(
+      () => !document.getElementById('ctxhelp').textContent.includes('No houses left'),
+      null, { timeout: 5000 });
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: the compact inspector scrolls instead of overflowing', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1024, height: 768 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    await page.keyboard.press('1');
+    await page.mouse.click(300, 300);
+    await page.mouse.click(600, 300);
+    await page.mouse.click(600, 450);
+    await page.keyboard.press('Enter');
+    // A light needs a junction with at least two road connections, so target
+    // the bend rather than a dead end.
+    await page.keyboard.press('5');
+    await page.mouse.click(600, 300);
+
+    await page.waitForFunction(
+      () => document.getElementById('inspect').classList.contains('open'), null, { timeout: 10000 });
+
+    const box = await page.evaluate(() => {
+      const el = document.getElementById('inspect');
+      const r = el.getBoundingClientRect();
+      const dock = document.getElementById('toolbar').getBoundingClientRect();
+      return {
+        width: r.width, left: r.left, right: r.right, bottom: r.bottom,
+        dockTop: dock.top, vw: window.innerWidth, vh: window.innerHeight,
+        scrollH: el.scrollHeight, clientH: el.clientHeight, overflowY: getComputedStyle(el).overflowY,
+        controls: el.querySelectorAll('input, button').length,
+      };
+    });
+    assert.ok(box.left >= 0 && box.right <= box.vw + 1,
+      `the compact inspector must stay on screen (${box.left}..${box.right} of ${box.vw})`);
+    assert.ok(box.bottom <= box.dockTop + 1,
+      `the compact inspector must not cover the dock (${box.bottom} vs ${box.dockTop})`);
+    assert.equal(box.overflowY, 'auto', 'the inspector must scroll internally');
+    assert.ok(box.controls >= 3, `the light editor needs its controls present, found ${box.controls}`);
+
+    // Every control must be reachable by scrolling, not clipped away.
+    const reachable = await page.evaluate(() => {
+      const el = document.getElementById('inspect');
+      const last = el.querySelector('input[type=range]:last-of-type');
+      last.scrollIntoView({ block: 'nearest' });
+      const r = last.getBoundingClientRect();
+      const p = el.getBoundingClientRect();
+      return r.top >= p.top - 1 && r.bottom <= p.bottom + 1;
+    });
+    assert.ok(reachable, 'the last slider must be scrollable into view');
+
+    await page.screenshot({ path: `${shots}/ui-inspector-compact-1024x768-seed1.png` });
+    assert.deepEqual(run.errors.filter(e => !/favicon/.test(e)), [], 'no console errors');
+  } finally {
+    await run.close();
+  }
 });
 
 // ---------- captures ----------

@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **265 passes** and `npm run test:browser` **38**, as of S02.2a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **280 passes** and `npm run test:browser` **46**, as of S02.2b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 ### Pitfall: verify a backup manifest from inside the backup
 
@@ -68,6 +68,17 @@ factory 1: fixture point [-150,270] maps to screen (490, 670), which is covered 
 
 Verify that guard in the red direction whenever a panel changes size.
 
+### Pitfall: an overlay must name the field it reads
+
+`src/render.js` carried a `_drawPollution` method that painted a fixed 620wu radial gradient around every factory, with hardcoded colours and **no simulated pollution field anywhere in the codebase**. Nothing ever set its flag, so it was unreachable as well as invented. Wiring the S02.2 Pollution toggle to it would have shown a player fabricated values, which DESIGN section 5 forbids.
+
+Every layer in `src/layers.js` now declares a `dataSource`, and two tests fail if a layer claims a field the simulation does not compute:
+
+- `test/layers.test.js` — no layer may name a pollution, noise, environment or emissions source
+- `test/browser/ui.js` — the renderer must not expose `_drawPollution` or `showPollution`
+
+When a layer is requested and no data exists, defer it to the task that owns the data. Do not draw a plausible-looking stand-in.
+
 ### Pitfall: browser tests share one page and leak state
 
 `test/browser/smoke.js` runs its cases against a single page in declaration order, so an earlier case can pollute a later one. Two real leaks occurred during S01.7:
@@ -88,8 +99,10 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `npm run test:browser` | S00.2 | **Created.** Node assert-based Playwright smoke; extend the runner to include later browser files |
 | `npm run test:browser` | S02.1 | **Extended.** test/browser/ui.js: ui.css tokens vs uiTokens.js, measured contrast ratios, icon-map shape, emoji-free controls, real inventory badges, focus ring and reduced motion, depleted stock, inspector title, plus 60 tool-state captures at 1440x900 and 1024x768 |
 | `node scripts/mutate-s021.mjs` | S02.1 | Mutation harness for the S02.1 guards; applies each mutation, runs test/browser/ui.js, restores the file and prints which tests failed |
-| `npm run test:browser` | S02.2a | **Extended.** test/browser/ui.js gains the dock category structure, single-owner controller state (including the unknown-key throw), speed labels, the top-band and dock layout contract, the menu popover, dirty-only New map confirmation, and interface-chrome click passthrough. The harness gains `openCategory`, `selectTool`, `toolCategories` and `menuAction` |
+| `npm run test:browser` | S02.2b | **Extended.** test/browser/ui.js gains layer declarations backed by simulated data, one-layer-at-a-time with its labelled legend, the traffic legend counting the same edges the overlay draws, real access reachability, the sound toggle with an AudioContext counter proving no audio before a user gesture, export download plus bad-import isolation, the depletion reason and progression link, and compact inspector scrolling |
 | `node scripts/mutate-s022a.mjs` | S02.2a | Mutation harness for the S02.2a guards (10 mutations, 10 caught) |
+| `node --test test/layers.test.js` | S02.2b | **Created.** Overlay model: layer declarations name a real data source, traffic bands and thresholds, per-edge traffic rows, building reachability, one-overlay-at-a-time. Pure, no browser |
+| `node scripts/mutate-s022b.mjs` | S02.2b | Mutation harness for the S02.2b guards (12 mutations, 12 caught after one ineffective target was replaced) |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |
 | `node --test test/coreState.test.js` | S01.1 | **Created.** RNG state, ID source, deterministic graph IDs |

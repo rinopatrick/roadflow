@@ -12,10 +12,13 @@ import { mountIcons } from './icons.js';
 import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, autosave, importGame, exportGame, exportFilename, AUTOSAVE_INTERVAL_MS } from './save.js';
 import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { reconcileTrafficAfterEdit } from './access.js';
+import { LEVEL_XP } from './economy.js';
+import { trafficOverlay, accessOverlay, accessSummary, ACCESS_STATE, TRAFFIC_BANDS } from './layers.js';
 import { ui } from './ui/controller.js';
 import { buildToolbar, setTool, TOOLS } from './ui/toolbar.js';
 import { createHud } from './ui/hud.js';
 import { initMenu, openHelp, closeHelp } from './ui/menu.js';
+import { initLayers } from './ui/layers.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -36,6 +39,19 @@ let dirty = false;
 // local mirror here, which is what used to let the dock, the canvas cursor and
 // the inspector disagree.
 const hud = createHud(() => ({ eco, traffic, net }));
+
+// Access reachability is recomputed only when the graph changes, because it
+// walks the road network once per building.
+let accessCache = { version: -1, states: new Map() };
+function currentAccessStates() {
+  if (accessCache.version !== net.version) {
+    accessCache = { version: net.version, states: accessOverlay({ net, eco }) };
+  }
+  return accessCache.states;
+}
+
+// Assigned in boot(); module scope so the economy-driven refreshers can reach it.
+let dock = null;
 // NOTE: deliberately no separate `simTime` here. `traffic.time` is the single
 // simulation clock (CONTRACTS.md section 2). A second counter is what allowed
 // the renderer to display a phase the simulator was not obeying (EVIDENCE E04).
@@ -138,6 +154,40 @@ function loadFromSave({ source = 'manual' } = {}) {
     toast(`City loaded with ${result.warnings.length} note${result.warnings.length === 1 ? '' : 's'}.`, 'warn');
   }
   return true;
+}
+
+// ---------- inventory and progression ----------
+
+/** "houses" / "shops" / "factories" */
+function pluralOf(type) {
+  return type === 'factory' ? 'factories' : type + 's';
+}
+
+/**
+ * Why a placement was refused, and how to get more.
+ *
+ * DESIGN section 1: an unavailable choice must give a reason and a progression
+ * link, not just be greyed out. The numbers come from the live economy, so the
+ * message states the real level and the real XP still required.
+ */
+function depletionMessage(type) {
+  const label = BUILDING_DEFS[type]?.label?.toLowerCase() ?? type;
+  const need = LEVEL_XP(eco.level) - eco.xp;
+  const next = `Level ${eco.level + 1} grants more`;
+  return need > 0
+    ? `No ${pluralOf(label)} left — ${next} (${Math.max(0, Math.round(need))} XP to go).`
+    : `No ${pluralOf(label)} left — ${next}.`;
+}
+
+/** The context-help line for the active tool, including any inventory shortfall. */
+function describeTool(id) {
+  const tool = TOOLS.find(t => t.id === id);
+  if (!tool) return '';
+  const isBuilding = id === 'house' || id === 'shop' || id === 'factory';
+  if (isBuilding && (eco?.batch?.[id] ?? 0) <= 0) {
+    return `${depletionMessage(id)}  (${tool.key})`;
+  }
+  return `${tool.label} — ${tool.hint}  (${tool.key})`;
 }
 
 // ---------- input ----------
@@ -273,7 +323,12 @@ function openLightInspect(n) {
 }
 
 function placeBuilding(type, x, y) {
-  if (!eco.canPlace(type)) { toast(`No ${BUILDING_DEFS[type].label.toLowerCase()}s left — level up your city!`, 'warn'); return; }
+  if (!eco.canPlace(type)) {
+    // The control stays selectable so this reason is reachable, and the reason
+    // names the way forward rather than only the refusal (DESIGN section 1).
+    toast(depletionMessage(type), 'warn');
+    return;
+  }
   const b = eco.place(type, x, y);
   if (!b) {
     toast(type === 'house' ? 'Can\'t place here — needs buildable land near a road.' : 'Can\'t place here (blocked, or no road within reach).', 'warn');
@@ -460,12 +515,49 @@ function setSpeed(s) {
 // ---------- menu and inspector ----------
 const menu = initMenu({
   onSpeed: setSpeed,
+  isSoundEnabled: () => audioEnabled(),
+  onSound: (enabled) => {
+    setAudioEnabled(enabled);
+    if (enabled) sfx.click();
+  },
   onSave: () => {
     const res = saveGame(getWorld());
     // Report what actually happened. The v1 handler printed "City saved." for a
     // boolean, but the failure branch was easy to miss.
     if (res.ok) dirty = false;
     toast(res.ok ? 'City saved.' : `Save failed — ${res.error}`, res.ok ? '' : 'warn');
+    sfx.click();
+  },
+  onExport: () => {
+    // A download, not a silent clipboard write: the player asked for a file and
+    // gets one they can see.
+    try {
+      const text = exportGame(getWorld());
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = exportFilename();
+      a.click();
+      // Revoked on the next tick so the download has started.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast('City exported.');
+    } catch (err) {
+      toast(`Export failed — ${err.message}`, 'warn');
+    }
+    sfx.click();
+  },
+  onImport: (text, filename) => {
+    // A failed import must leave the current city exactly as it was. `importGame`
+    // validates before it builds anything, and `replaceWorld` is only reached on
+    // success.
+    if (!text) { toast(`Could not read ${filename}.`, 'warn'); return; }
+    const result = importGame(text, {});
+    if (!result.ok) {
+      toast(`Import failed — ${result.error}. The current city is unchanged.`, 'warn');
+      return;
+    }
+    replaceWorld(result.world);
+    toast(`Imported ${filename}.`);
     sfx.click();
   },
   onLoad: () => {
@@ -499,6 +591,28 @@ const menu = initMenu({
 
 document.getElementById('inspectClose').addEventListener('click', closeInspect);
 
+// ---------- layers ----------
+const layersUI = initLayers();
+
+/** Real counts for the active legend, so it reports the city, not a key. */
+function refreshLegend() {
+  if (ui.overlay === null) return;
+  const stats = {};
+  if (ui.overlay === 'traffic') {
+    const counts = {};
+    for (const band of TRAFFIC_BANDS) counts[`band-${band.level}`] = 0;
+    for (const row of trafficOverlay(net)) counts[`band-${row.level}`]++;
+    stats.traffic = counts;
+  } else if (ui.overlay === 'access') {
+    const summary = accessSummary(currentAccessStates());
+    stats.access = {
+      [ACCESS_STATE.REACHABLE]: summary.reachable,
+      [ACCESS_STATE.UNREACHABLE]: summary.unreachable,
+    };
+  }
+  layersUI.refresh(stats);
+}
+
 // ---------- HUD ----------
 // Rendering the status band lives in src/ui/hud.js. Only the inventory badges
 // stay here, because they are the dock's own display of economy stock.
@@ -513,6 +627,9 @@ function updateBatchUI() {
     badge.textContent = stock;
     badge.closest('.tool-btn')?.classList.toggle('depleted', stock === 0);
   }
+  // The context-help line reports an inventory shortfall, so it has to follow
+  // stock too — otherwise it keeps advertising a tool that has run out.
+  dock?.refresh();
 }
 
 // ---------- main loop ----------
@@ -539,6 +656,7 @@ function loop(now) {
   const ticks = clock.advance(Math.max(0, wallSeconds), speed);
   if (ticks > 0) {
     updateBatchUI();
+    refreshLegend();
   }
 
   renderer.draw({
@@ -549,6 +667,8 @@ function loop(now) {
     tool: ui.activeTool,
     simTime: traffic.time,
     selected,
+    overlay: ui.overlay,
+    accessStates: ui.overlay === 'access' ? currentAccessStates() : null,
   });
   hud.update();
 
@@ -570,6 +690,10 @@ function boot() {
 
   // The active tool is published to the canvas class from ONE subscription, so
   // the cursor and the dock cannot drift apart.
+  //
+  // `uiReady` gates the click sound: the boot-time selection below is not a user
+  // gesture, and creating an AudioContext before one is blocked by the browser.
+  let uiReady = false;
   const applyTool = (id) => {
     draft = [];                 // switching tools abandons any road draft
     canvas.className = 'tool-' + id;
@@ -578,12 +702,17 @@ function boot() {
   ui.subscribe((state, changed) => {
     if (!changed.includes('activeTool')) return;
     applyTool(state.activeTool);
-    sfx.click();
+    if (uiReady) sfx.click();
   });
 
   mountIcons();
-  buildToolbar();
+  dock = buildToolbar({ describeTool });
   setTool('road');
+  uiReady = true;
+
+  // Re-render the dock when inventory changes, so the depletion reason and the
+  // badges cannot lag behind the economy.
+  ui.subscribe(() => { refreshLegend(); });
 
   // Recovery is only offered when a VALID backup exists, so the button cannot
   // promise something it cannot deliver.
@@ -621,6 +750,7 @@ function boot() {
     // than infer it from CSS classes.
     get ui() { return ui; },
     get draftLength() { return draft.length; },
+    get accessStates() { return currentAccessStates(); },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };
