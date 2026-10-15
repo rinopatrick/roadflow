@@ -1418,6 +1418,44 @@
       ]
     },
     {
+      "id": "S02.6b",
+      "status": "done",
+      "dependsOn": [
+        "S02.6a"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/construction-cursor.test.js",
+          "exitCode": 0,
+          "result": "tests 8, pass 8, fail 0. Covers: the cursor moves CURSOR_STEP_WU per arrow press, all four directions, shift+arrow uses the fine step, show centres and makes visible, hide preserves the position, arrow keys map to directions, non-arrow keys are rejected, and FocusTrap has the expected methods."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 434, pass 434, fail 0. Was 426 before this task; +8 from test/construction-cursor.test.js. No existing test weakened or removed. (Note: the count briefly dropped to 412 during development because I created test/construction-cursor.test.js with the same filename as the S01.5 road-construction tests, which overwrote 454 lines of existing tests. Fixed by restoring construction.test.js from the trunk and moving the cursor tests to construction-cursor.test.js.)"
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 59, pass 59, fail 0. Unchanged: the cursor and focus trap are pure and tested in Node."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run."
+        }
+      ],
+      "notes": [
+        "Created src/construction.js (keyboard construction cursor: arrow movement 10 wu, shift 1 wu, Enter sets point, Escape cancels; and a simple FocusTrap with capture and Tab-cycle), test/construction-cursor.test.js (8 tests). Modified src/main.js (the cursor is shown when a road draft starts, hidden when the draft is committed or cancelled, arrow keys move it when the draft is open with Shift for the fine step).",
+        "The keyboard cursor is a virtual pointer position in world space. The renderer draws a crosshair at the cursor so the player can see where they are. The cursor is shown when a road draft starts and hidden when the draft is committed or abandoned.",
+        "The FocusTrap captures the focusable elements in a container and traps Tab within them. It is wired but not yet used by the help overlay or menu popover - that is deferred to the accessibility polish in S08.2.",
+        "DEFECT: I accidentally overwrote the S01.5 road-construction tests (test/construction.test.js, 454 lines, 22 tests) with my cursor tests because I used the same filename. The trunk had the original, which I restored and moved the cursor tests to construction-cursor.test.js. This is the kind of mistake TESTING.md warns about.",
+        "Deliberately deferred to a later task: the focus trap is wired but not yet used by the help overlay or menu popover (the accessibility polish in S08.2 will wire it). The economic demand pausing in the tutorial is also deferred to S03.1 (demand is an S06 system).",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
+    },
+    {
       "id": "S03.1",
       "status": "pending",
       "dependsOn": [

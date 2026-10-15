@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **426 passes** and `npm run test:browser` **59**, as of S02.6a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **434 passes** and `npm run test:browser` **59**, as of S02.6b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -230,6 +230,7 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node --test test/preview.test.js` | S02.5b | **Created.** Preview placement validity: valid, no-stock, terrain, overlap (the bug), road-reach (the bug), just-inside-reach, and preview-agrees-with-commit for every failure mode. Pure, no canvas |
 | `node scripts/mutate-s025b.mjs` | S02.5b | Mutation harness for the S02.5b guards (7 mutations, 7 caught) |
 | `node --test test/tutorial.test.js` | S02.6a | **Created.** Tutorial state machine: five steps in DESIGN order, earliest-unmet-condition derivation, partial progress, monotonicity, world snapshot purity. Pure, no canvas |
+| `src/construction.js` + `test/construction-cursor.test.js` | S02.6b | **Created.** Keyboard construction cursor (arrow 10 wu, shift 1 wu, show/hide) and a simple FocusTrap. Pure, no canvas |
 | `node scripts/probe-buildings.mjs` | S02.4c | **Created.** Captures the building silhouettes close up and reports the variant each building wears |
 | `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |
