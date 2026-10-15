@@ -1778,6 +1778,54 @@ test('ui: shortcuts do not edit the city while the menu is open', async () => {
   }
 });
 
+test('ui: dialogs are labelled and toasts are a polite live region', async () => {
+  const { page } = game;
+  // The semantic roles are STATIC attributes. Read them without opening
+  // anything - no popover or dialog interaction needed.
+  const attrs = await page.evaluate(() => ({
+    helpRole: document.getElementById('help').getAttribute('role'),
+    helpModal: document.getElementById('help').getAttribute('aria-modal'),
+    helpLabel: document.getElementById('help').getAttribute('aria-label'),
+    menuRole: document.getElementById('menupop').getAttribute('role'),
+    toastsLive: document.getElementById('toasts').getAttribute('aria-live'),
+  }));
+  assert.equal(attrs.helpRole, 'dialog', 'the help overlay must be a dialog');
+  assert.equal(attrs.helpModal, 'true', 'the help overlay must be modal');
+  assert.ok(attrs.helpLabel, 'the help dialog must have a label');
+  assert.equal(attrs.menuRole, 'menu', 'the popover must be a menu');
+  assert.equal(attrs.toastsLive, 'polite', 'toasts must be a polite live region');
+});
+
+test('ui: the light inspector labels every slider', async () => {
+  // Uses the same L-shape fixture that works in the compact inspector test.
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+    await page.keyboard.press('1');
+    await page.mouse.click(300, 300);
+    await page.mouse.click(600, 300);
+    await page.mouse.click(600, 450);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('5');
+    await page.mouse.click(600, 300);
+    await page.waitForFunction(() => document.getElementById('inspect').classList.contains('open'), null, { timeout: 10000 });
+    const sliders = await page.evaluate(() => {
+      const inputs = [...document.querySelectorAll('#inspect input[type=range]')];
+      return inputs.map(inp => ({
+        hasLabel: !!document.querySelector('label[for="' + inp.id + '"]'),
+        ariaLabel: inp.getAttribute('aria-label'),
+      }));
+    });
+    assert.ok(sliders.length >= 3, 'the light editor must have three sliders');
+    for (const s of sliders) {
+      assert.ok(s.hasLabel, 'slider must have a label association');
+      assert.ok(s.ariaLabel, 'slider must have an aria-label');
+    }
+  } finally { await run.close(); }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

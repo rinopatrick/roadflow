@@ -34,7 +34,7 @@
       <button class="icon-btn" id="soundbtn" aria-pressed="true" title="Sound on"></button>
       <button class="icon-btn" id="menubtn" data-icon="menu" aria-label="Menu"
               aria-haspopup="true" aria-expanded="false" title="Save, load and city options"></button>
-      <div id="menupop" hidden>
+      <div id="menupop" role="menu" aria-label="City options" hidden>
         <button class="menu-btn" id="btnSave" data-icon="save">Save</button>
         <button class="menu-btn" id="btnLoad" data-icon="load">Load</button>
         <button class="menu-btn" id="btnExport" data-icon="exportFile">Export city…</button>
@@ -62,16 +62,16 @@
     </div>
   </div>
 
-  <div id="inspect">
+  <div id="inspect" role="complementary" aria-label="Selection inspector">
     <button class="close" id="inspectClose" data-icon="close" aria-label="Close inspector"></button>
     <h3 id="insTitle">—</h3>
     <div id="insBody"></div>
   </div>
 
-  <div id="toasts"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
   <pre id="errbanner" style="display:none;position:absolute;bottom:8px;right:8px;z-index:99;background:#5c1a1a;color:#ffd9d9;padding:8px 12px;border-radius:8px;font-size:11px;max-width:60vw;max-height:40vh;overflow:auto;white-space:pre-wrap"></pre>
 
-  <div id="help">
+  <div id="help" role="dialog" aria-modal="true" aria-label="Roadflow help">
     <div class="card">
       <h2>Roadflow</h2>
       <p>A city builder focused on the fun part: <b>roads and traffic</b>.</p>
