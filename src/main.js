@@ -15,6 +15,7 @@ import { reconcileTrafficAfterEdit } from './access.js';
 import { LEVEL_XP } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
 import { tutorialStep, tutorialWorldSnapshot } from './tutorial.js';
+import { ConstructionCursor, arrowDirection } from './construction.js';
 import { buildingVariant } from './render/buildings.js';
 import {
   pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
@@ -237,6 +238,7 @@ function describeTool(id) {
 // The pointer gesture is tracked in one place (src/input.js), so a lost
 // pointer cannot leave the map dragging with no button held.
 const pointer = new PointerTracker();
+const cursor = new ConstructionCursor();
 let mouseWorld = [0, 0];
 let mouseScreen = [0, 0];
 
@@ -312,6 +314,7 @@ function handlePrimary(wx, wy) {
       // Deduplicated: the second pointerdown of a double-click lands on the
       // same pixel as the first, and a zero-length final segment would be
       // built into the road.
+      cursor.show(wx, wy);
       draft = pushDraftPoint(draft, wx, wy);
       sfx.road();
       break;
@@ -338,7 +341,7 @@ function finishRoad() {
   }
   const res = net.addRoad(draft, cls);
   if (res.edgeIds.length) { sfx.place(); dirty = true; }
-  draft = [];
+  draft = []; cursor.hide();
 }
 
 function placeRoundabout(x, y) {
@@ -553,6 +556,11 @@ window.addEventListener('keydown', (e) => {
   });
   if (result.preventDefault) e.preventDefault();
 
+  // Keyboard construction cursor: arrows move the virtual pointer when a draft is open.
+  if (draft.length > 0) {
+    const dir = arrowDirection(e.key);
+    if (dir) { cursor.move(dir, e.shiftKey); e.preventDefault(); return; }
+  }
   switch (result.action) {
     case 'escape': escape(); return;
     case 'fit': fitCity(); return;
