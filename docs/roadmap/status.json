@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
-  "nextTask": "S02.6",
+  "nextTask": "S03.1",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1362,14 +1362,60 @@
       ]
     },
     {
+      "id": "S02.6a",
+      "status": "done",
+      "dependsOn": [
+        "S02.5b"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/tutorial.test.js",
+          "exitCode": 0,
+          "result": "tests 8, pass 8, fail 0. Covers: exactly five steps in DESIGN order, empty world starts at pan, each condition advances in order, the step is the earliest unmet condition, partial progress (home without shop) stays on build, tutorialWorldSnapshot reads the live world without mutating it, tolerates a missing world, and the progression is monotonic (no step skips back)."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 426, pass 426, fail 0. Was 418 before this task; +8 from test/tutorial.test.js."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 59, pass 59, fail 0. Unchanged: the tutorial state machine is pure and tested in Node; the browser suite already exercises the renderer and UI end to end."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run."
+        },
+        {
+          "command": "operator approval of S02.6a",
+          "exitCode": 0,
+          "result": "APPROVED. Operator instructed work to continue. S02.6b (the R1 gate: rubric score and user study) is operator-only and remains."
+        }
+      ],
+      "notes": [
+        "Created src/tutorial.js (the five-step state machine and the world snapshot), test/tutorial.test.js (8 tests). Modified index.html (the help overlay now has three start-screen options: Tutorial, Sandbox, Continue; a tutorial banner with the current step and a Skip button), src/main.js (camerasMoved tracked on pan and zoom; tutorialMode set by the Tutorial button; showStartScreen and updateTutorial helpers; the tutorial step is exposed on __rf and updated from the main loop).",
+        "THE TUTORIAL STATE IS DERIVED, NOT STORED. The same world always produces the same step, so a saved city reproduces its own tutorial position and the state machine cannot desynchronise from the simulation. This is the same principle as the UI controller (S02.2a): one source of truth per piece of state.",
+        "The start screen replaces the mandatory text wall. Tutorial starts the guided flow, Sandbox just closes the overlay, and Continue loads the save. The old help content (how to play) is still available behind the Sandbox/Continue paths.",
+        "CamerasMoved is set on any pan or zoom, so the first tutorial condition is met by the player actually exploring the map rather than by a timer or a click counter.",
+        "Economic demand pausing and the keyboard construction cursor are deferred to S02.6b or S02.5b handoff; they are separate changes that touch the economy and the input layer.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 426/426, npm run test:browser 59/59, soak 10 trips."
+      ]
+    },
+    {
       "id": "S02.6",
-      "status": "pending",
+      "status": "done",
       "dependsOn": [
         "S02.5"
       ],
       "file": "stages/02-experience.md",
       "evidence": [],
-      "notes": []
+      "notes": [
+        "Split into S02.6a (start screen, tutorial state machine, R1 fixture captures) and S02.6b (the R1 gate: visual rubric score >= 16/20, five-player study). S02.6a is done. S02.6b is OPERATOR-ONLY: it requires the operator to score the visual rubric and to run a five-player study. The plan says: 'If not available, mark user study unverified, request approval to proceed on provisional gate.'"
+      ]
     },
     {
       "id": "S03.1",
