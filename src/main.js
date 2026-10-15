@@ -14,6 +14,7 @@ import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { reconcileTrafficAfterEdit } from './access.js';
 import { LEVEL_XP } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
+import { tutorialStep, tutorialWorldSnapshot } from './tutorial.js';
 import { buildingVariant } from './render/buildings.js';
 import {
   pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
@@ -34,6 +35,8 @@ let ids = createIdSource();   // world-owned ID source (deterministic, collision
 let speed = 1;
 let draft = [];            // road draft control points
 let selected = null;
+let camerasMoved = false;  // the first tutorial condition
+let tutorialMode = false;  // true when the player chose Tutorial
 
 // `dirty` means the player has built something that is not in their own save.
 // Autosave deliberately does NOT clear it: the autosave slot is a safety net,
@@ -246,6 +249,7 @@ canvas.addEventListener('pointerdown', (e) => {
   mouseScreen = [e.offsetX, e.offsetY];
 
   const intent = pointerIntent(e);
+  camerasMoved = true;
   if (intent === 'pan') {
     pointer.beginPan(e.offsetX, e.offsetY, renderer.cam.x, renderer.cam.y);
     canvas.classList.add('panning');
@@ -298,6 +302,7 @@ canvas.addEventListener('wheel', (e) => {
   const factor = Math.exp(-e.deltaY * 0.0012);
   // Solved directly from the pointer position, so the world point under the
   // cursor is fixed and repeated zooming cannot accumulate drift.
+  camerasMoved = true;
   Object.assign(renderer.cam, renderer.zoomAt(e.offsetX, e.offsetY, renderer.cam.zoom * factor));
 }, { passive: false });
 
@@ -660,6 +665,30 @@ document.getElementById('fitbtn').addEventListener('click', () => {
   sfx.click();
 });
 
+  // Start screen: three options (DESIGN section 6).
+  document.getElementById('btnTutorial')?.addEventListener('click', () => {
+    tutorialMode = true;
+    showStartScreen(false);
+    updateTutorial();
+    sfx.click();
+  });
+  document.getElementById('btnSandbox')?.addEventListener('click', () => {
+    tutorialMode = false;
+    showStartScreen(false);
+    sfx.click();
+  });
+  document.getElementById('btnContinue')?.addEventListener('click', () => {
+    showStartScreen(false);
+    if (loadFromSave()) toast('City loaded.');
+    else newGame();
+    sfx.click();
+  });
+  document.getElementById('btnSkipTutorial')?.addEventListener('click', () => {
+    tutorialMode = false;
+    document.getElementById('tutorialBanner').hidden = true;
+    sfx.click();
+  });
+
 /**
  * Applies the sound setting to the audio module AND the control that shows it.
  *
@@ -667,6 +696,28 @@ document.getElementById('fitbtn').addEventListener('click', () => {
  * — can call it: hoisting makes the order irrelevant, and `menu` is initialised
  * before boot runs.
  */
+/**
+ * Shows or hides the start screen overlay.
+ */
+function showStartScreen(visible) {
+  document.getElementById('help').classList.toggle('open', visible);
+}
+
+/**
+ * Reads the live world and updates the tutorial banner.
+ * Called from the main loop, so the step advances when the condition is met.
+ */
+function updateTutorial() {
+  if (!tutorialMode) return;
+  const snap = tutorialWorldSnapshot({ net, eco, camerasMoved });
+  const r = tutorialStep(snap);
+  const banner = document.getElementById('tutorialBanner');
+  const label = document.getElementById('tutorialLabel');
+  if (!banner || !label) return;
+  banner.hidden = r.done;
+  label.textContent = r.done ? 'Tutorial complete!' : `Step ${r.index + 1}/5: ${r.label}`;
+}
+
 function applyAudio(enabled) {
   setAudioEnabled(enabled);
   menu.applySound(enabled);
@@ -738,6 +789,7 @@ function loop(now) {
   if (ticks > 0) {
     updateBatchUI();
     refreshLegend();
+    updateTutorial();
   }
 
   renderer.draw({
@@ -840,6 +892,7 @@ function boot() {
     get terrainStats() { return renderer.terrainStats(); },
     // The silhouette selector, so a test can assert what will be drawn.
     buildingVariant,
+    get tutorial() { return tutorialStep(tutorialWorldSnapshot({ net, eco, camerasMoved })); },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };

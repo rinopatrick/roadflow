@@ -74,8 +74,17 @@
   <div id="help" role="dialog" aria-modal="true" aria-label="Roadflow help">
     <div class="card">
       <h2>Roadflow</h2>
-      <p>A city builder focused on the fun part: <b>roads and traffic</b>.</p>
-      <p style="margin-top:10px">
+      <p id="startPrompt">A city builder focused on the fun part: <b>roads and traffic</b>.</p>
+      <div id="startOptions" style="margin-top:14px;display:flex;flex-direction:column;gap:8px">
+        <button class="menu-btn" id="btnTutorial" style="justify-content:center;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--accent);color:var(--surface-raised);font-weight:600">Tutorial</button>
+        <button class="menu-btn" id="btnSandbox" style="justify-content:center;border:1px solid var(--line);border-radius:var(--radius-md)">Sandbox</button>
+        <button class="menu-btn" id="btnContinue" style="justify-content:center;border:1px solid var(--line);border-radius:var(--radius-md)">Continue</button>
+      </div>
+      <div id="tutorialBanner" hidden style="margin-top:12px;padding:8px 12px;background:var(--accent-soft);border-radius:var(--radius-md);font-size:13px;color:var(--ink)">
+        <span id="tutorialLabel"></span>
+        <button id="btnSkipTutorial" style="margin-left:8px;background:none;border:1px solid var(--line);border-radius:var(--radius-sm);padding:2px 8px;cursor:pointer;font-size:11px">Skip</button>
+      </div>
+      <div id="helpDetail" style="margin-top:10px">
         <b>Build roads</b> with the road tool — click to set points, double-click or
         press <kbd>Enter</kbd> to finish. They connect automatically.<br>
         <b>Place buildings</b> from your available batch; they need a driveway to reach a road.<br>
@@ -90,7 +99,7 @@
         <kbd>Drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>1-9</kbd> tools · <kbd>Space</kbd> pause ·
         <kbd>Esc</kbd> cancel · <kbd>Del</kbd>/<kbd>right-click</kbd> bulldoze mode
       </p>
-      <button id="helpClose">Let's build</button>
+      <button id="helpClose" hidden>Let's build</button>
     </div>
   </div>
 
