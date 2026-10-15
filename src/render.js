@@ -15,6 +15,7 @@ import {
   decorativePatches, TileCache,
 } from './render/terrain.js';
 import { buildingVariant, entryAngle, variantGeometry } from './render/buildings.js';
+import { previewPlacement } from './render/preview.js';
 import {
   capForNode, junctionFootprint, edgeEndTrims, shadowOffset, offsetInRotatedFrame,
 } from './render/junctions.js';
@@ -771,25 +772,25 @@ export class Renderer {
     } else if (tool === 'house' || tool === 'shop' || tool === 'factory') {
       const def = BUILDING_DEFS[tool];
       const s = def.size * zoom;
-      const canPlace = eco.canPlace(tool);
-      const isRoadable = terrain.isRoadable(mx, my);
+      // The preview must agree with the commit: evaluateBuildingPlacement checks
+      // stock, terrain, overlap and road reach, so the preview can never show
+      // valid teal when the placement will fail (DESIGN section 5).
+      const preview = previewPlacement({ net, terrain, eco }, tool, mx, my);
+      const ok = preview.ok;
 
       ctx.save();
       ctx.translate(msx, msy);
-      ctx.fillStyle = isRoadable && canPlace ? alpha(UI_TOKENS.accent, 0.4) : alpha(UI_TOKENS.danger, 0.4);
-      ctx.strokeStyle = isRoadable && canPlace ? UI_TOKENS.accent : UI_TOKENS.danger;
+      ctx.fillStyle = ok ? alpha(UI_TOKENS.accent, 0.4) : alpha(UI_TOKENS.danger, 0.4);
+      ctx.strokeStyle = ok ? UI_TOKENS.accent : UI_TOKENS.danger;
       ctx.lineWidth = 1.5 * zoom;
       this._roundRect(ctx, -s / 2, -s / 2, s, s, 3 * zoom);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
 
-      const plural = tool === 'factory' ? 'factories' : tool + 's';
-      const parts = !canPlace
-        ? [{ text: `No ${plural} left`, error: true, bold: true }]
-        : !isRoadable
-        ? [{ text: `Invalid terrain`, error: true, bold: true }]
-        : [{ text: def.label, bold: true }, { text: `Available: ${eco.batch[tool] || 0}`, color: UI_TOKENS.muted }];
+      const parts = ok
+        ? [{ text: def.label, bold: true }, { text: `Available: ${eco.batch[tool] || 0}`, color: UI_TOKENS.muted }]
+        : [{ text: preview.label, error: true, bold: true }];
 
       this._drawPillBadge(ctx, msx + s / 2 + 12, msy - 10, parts);
     } else if (tool === 'bulldoze') {

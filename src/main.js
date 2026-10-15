@@ -366,12 +366,12 @@ function openLightInspect(n) {
   const L = n.light;
   openInspect('Traffic light', `
     <div class="row"><span>Connections</span><span class="v">${n.edges.size}</span></div>
-    <label>Cycle length <span id="vCycle">${L.cycle.toFixed(0)}s</span></label>
-    <input type="range" data-key="cycle" min="8" max="60" step="1" value="${L.cycle}">
-    <label>Green ratio <span id="vGreen">${(L.greenRatio * 100).toFixed(0)}%</span></label>
-    <input type="range" data-key="greenRatio" min="0.25" max="0.6" step="0.01" value="${L.greenRatio}">
-    <label>Offset <span id="vOffset">${L.offset.toFixed(0)}s</span></label>
-    <input type="range" data-key="offset" min="0" max="${L.cycle}" step="0.5" value="${L.offset}">
+    <label for="sliderCycle">Cycle length</label> <span id="vCycle">${L.cycle.toFixed(0)}s</span></label>
+    <input type="range" id="sliderCycle" data-key="cycle" min="8" max="60" step="1" aria-label="Cycle length in seconds" value="${L.cycle}">
+    <label for="sliderGreen">Green ratio</label> <span id="vGreen">${(L.greenRatio * 100).toFixed(0)}%</span></label>
+    <input type="range" id="sliderGreen" data-key="greenRatio" min="0.25" max="0.6" step="0.01" aria-label="Green ratio, 25 to 60 percent" value="${L.greenRatio}">
+    <label for="sliderOffset">Offset</label> <span id="vOffset">${L.offset.toFixed(0)}s</span></label>
+    <input type="range" id="sliderOffset" data-key="offset" min="0" max="${L.cycle}" step="0.5" aria-label="Phase offset in seconds" value="${L.offset}">
     <label style="color:var(--muted);font-size:12px">Green wave: match offsets along an artery.</label>
   `, (key, val) => {
     if (key === 'cycle') { L.cycle = val; document.getElementById('vCycle').textContent = val + 's'; }
