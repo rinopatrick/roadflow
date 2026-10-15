@@ -14,6 +14,7 @@ import {
   tileWu, tileDetail, tilePx, visibleTiles, rasterizeTile,
   decorativePatches, TileCache,
 } from './render/terrain.js';
+import { buildingVariant, entryAngle, variantGeometry } from './render/buildings.js';
 import {
   capForNode, junctionFootprint, edgeEndTrims, shadowOffset, offsetInRotatedFrame,
 } from './render/junctions.js';
@@ -834,15 +835,19 @@ export class Renderer {
       factory: { top: '#9a9a97', side: '#7d7d7a', roof: '#e8975a' },
     }[b.type];
 
+    // Orientation comes from the driveway, not from the stored cosmetic rot:
+    // the ENTRY faces the road (DESIGN section 3). A building with no driveway
+    // keeps its cosmetic rotation rather than snapping to a guess.
+    const facing = entryAngle(b, net) ?? rot;
+
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate(rot);
+    ctx.rotate(facing);
 
     // Ground shadow, in the fixed screen direction. The offset is counter-rotated
-    // because this block is inside ctx.rotate(rot): applying (+3,+4) directly made
-    // the shadow rotate with the building, so a rotated house cast it up-and-left
-    // while its neighbour cast down-and-right (DESIGN section 3).
-    const bShadow = offsetInRotatedFrame(rot, ...shadowOffset(1));
+    // because this block is inside ctx.rotate: applying (+3,+4) directly made
+    // the shadow rotate with the building (fixed in S02.3b).
+    const bShadow = offsetInRotatedFrame(facing, ...shadowOffset(1));
     ctx.fillStyle = 'rgba(0,0,0,0.13)';
     this._roundRect(ctx, -s / 2 + bShadow[0] * zoom, -s / 2 + bShadow[1] * zoom, s, s, 3 * zoom);
     ctx.fill();
@@ -857,23 +862,32 @@ export class Renderer {
     this._roundRect(ctx, -s / 2, -s / 2, s, s, 3 * zoom);
     ctx.fill();
 
-    if (b.type === 'factory') {
-      // orange roof stripes
-      ctx.fillStyle = colors.roof;
-      for (let i = -1; i <= 1; i++) {
-        this._roundRect(ctx, i * s * 0.28 - s * 0.09, -s * 0.32, s * 0.18, s * 0.64, 2 * zoom);
+    // Silhouette details, chosen from the building ID so they survive a
+    // save/load unchanged, and drawn in the entry-oriented frame so +x is the
+    // door side. Unit-space shapes are scaled by the building size.
+    const shapes = variantGeometry(b.type, buildingVariant(b.id));
+    for (const shape of shapes) {
+      ctx.fillStyle = shape.role === 'roofDark' ? colors.side
+        : shape.role === 'accent' ? colors.roof
+        : shape.role === 'yard' ? '#b9bd8f'
+        : colors.side;
+      if (shape.kind === 'rect') {
+        this._roundRect(ctx,
+          (shape.x - shape.w / 2) * s, (shape.y - shape.h / 2) * s,
+          shape.w * s, shape.h * s, 1.5 * zoom);
         ctx.fill();
+      } else if (shape.kind === 'circle') {
+        ctx.beginPath();
+        ctx.arc(shape.x * s, shape.y * s, Math.max(shape.r * s, 1.2 * zoom), 0, Math.PI * 2);
+        ctx.fill();
+      } else if (shape.kind === 'line') {
+        ctx.beginPath();
+        ctx.moveTo(shape.x1 * s, shape.y1 * s);
+        ctx.lineTo(shape.x2 * s, shape.y2 * s);
+        ctx.lineWidth = Math.max(1.2 * zoom, 1);
+        ctx.strokeStyle = colors.side;
+        ctx.stroke();
       }
-    }
-    if (b.type === 'shop') {
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      this._roundRect(ctx, -s * 0.3, -s * 0.3, s * 0.6, s * 0.18, 2 * zoom);
-      ctx.fill();
-    }
-    if (b.type === 'house') {
-      ctx.fillStyle = colors.roof;
-      this._roundRect(ctx, -s * 0.28, -s * 0.28, s * 0.56, s * 0.56, 2 * zoom);
-      ctx.fill();
     }
     ctx.restore();
   }
