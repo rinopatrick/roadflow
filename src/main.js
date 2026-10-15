@@ -15,6 +15,9 @@ import { reconcileTrafficAfterEdit } from './access.js';
 import { LEVEL_XP } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
 import { buildingVariant } from './render/buildings.js';
+import {
+  pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
+} from './input.js';
 import { trafficOverlay, accessOverlay, accessSummary, ACCESS_STATE, TRAFFIC_BANDS } from './layers.js';
 import { ui } from './ui/controller.js';
 import { buildToolbar, setTool, TOOLS } from './ui/toolbar.js';
@@ -228,8 +231,9 @@ function describeTool(id) {
 }
 
 // ---------- input ----------
-let panning = false;
-let panStart = null;
+// The pointer gesture is tracked in one place (src/input.js), so a lost
+// pointer cannot leave the map dragging with no button held.
+const pointer = new PointerTracker();
 let mouseWorld = [0, 0];
 let mouseScreen = [0, 0];
 
@@ -241,13 +245,13 @@ canvas.addEventListener('pointerdown', (e) => {
   mouseWorld = [wx, wy];
   mouseScreen = [e.offsetX, e.offsetY];
 
-  if (e.button === 1 || e.button === 2 || e.shiftKey) {
-    panning = true;
-    panStart = { sx: e.offsetX, sy: e.offsetY, cx: renderer.cam.x, cy: renderer.cam.y };
+  const intent = pointerIntent(e);
+  if (intent === 'pan') {
+    pointer.beginPan(e.offsetX, e.offsetY, renderer.cam.x, renderer.cam.y);
     canvas.classList.add('panning');
     return;
   }
-  if (e.button !== 0) return;
+  if (intent !== 'draw') return;
   handlePrimary(wx, wy);
 });
 
@@ -255,15 +259,32 @@ canvas.addEventListener('pointermove', (e) => {
   const [wx, wy] = renderer.screenToWorld(e.offsetX, e.offsetY);
   mouseWorld = [wx, wy];
   mouseScreen = [e.offsetX, e.offsetY];
-  if (panning && panStart) {
-    renderer.cam.x = panStart.cx - (e.offsetX - panStart.sx) / (renderer.cam.zoom);
-    renderer.cam.y = panStart.cy - (e.offsetY - panStart.sy) / (renderer.cam.zoom);
+  if (pointer.isPanning) {
+    const cam = pointer.panTo(e.offsetX, e.offsetY, renderer.cam.zoom);
+    if (cam) { renderer.cam.x = cam.x; renderer.cam.y = cam.y; }
   }
 });
 
 canvas.addEventListener('pointerup', () => {
-  panning = false;
-  panStart = null;
+  pointer.endPan();
+  canvas.classList.remove('panning');
+});
+
+// A lost pointer must end whatever gesture was in progress, or the map drags
+// with no button held. pointercancel and lost capture are definitive (the
+// gesture was interrupted), so they also discard an unfinished road draft;
+// a window blur is not (the user may come back and continue).
+canvas.addEventListener('pointercancel', () => {
+  pointer.cancel();
+  draft = [];
+  canvas.classList.remove('panning');
+});
+canvas.addEventListener('lostpointercapture', () => {
+  pointer.cancel();
+  canvas.classList.remove('panning');
+});
+window.addEventListener('blur', () => {
+  pointer.cancel();
   canvas.classList.remove('panning');
 });
 
@@ -283,7 +304,10 @@ canvas.addEventListener('wheel', (e) => {
 function handlePrimary(wx, wy) {
   switch (ui.activeTool) {
     case 'road': case 'avenue': case 'highway': {
-      draft.push([wx, wy]);
+      // Deduplicated: the second pointerdown of a double-click lands on the
+      // same pixel as the first, and a zero-length final segment would be
+      // built into the road.
+      draft = pushDraftPoint(draft, wx, wy);
       sfx.road();
       break;
     }
@@ -514,23 +538,28 @@ function select(x, y) {
 
 // ---------- keyboard ----------
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+  // The scoping decision is pure (src/input.js): which target, which scope,
+  // which key. Order matters - a form control always wins, then Escape, then
+  // whatever dialog or panel is open, then the individual keys.
+  const result = keyboardAction(e, {
+    dialog: ui.dialog,
+    panel: ui.openPanel,
+    hasDraft: draft.length >= 2,
+  });
+  if (result.preventDefault) e.preventDefault();
 
-  if (e.key === 'Escape') { escape(); return; }
-  // A modal owns the keyboard, so a shortcut can never edit the city beneath it.
-  if (ui.dialog) return;
+  switch (result.action) {
+    case 'escape': escape(); return;
+    case 'fit': fitCity(); return;
+    case 'finish-road': finishRoad(); return;
+    case 'toggle-speed': setSpeed(speed === 0 ? 1 : 0); return;
+    case 'bulldoze': setTool('bulldoze'); return;
+    case 'none': return;
+  }
 
-  if (e.key === 'f' || e.key === 'F') { fitCity(); return; }
-
+  // A possible tool shortcut: main.js owns the key-to-tool mapping.
   const t = TOOLS.find(t => t.key === e.key);
   if (t) { setTool(t.id); return; }
-  if (e.key === 'Enter' && draft.length >= 2) { finishRoad(); return; }
-  if (e.key === ' ') {
-    e.preventDefault();
-    setSpeed(speed === 0 ? 1 : 0);
-    return;
-  }
-  if (e.key === 'Delete' || e.key === 'Backspace') { setTool('bulldoze'); return; }
 });
 
 /** Escape cancels the innermost thing that is open, and nothing else. */

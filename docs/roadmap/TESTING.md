@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **388 passes** and `npm run test:browser` **54**, as of S02.4c. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **411 passes** and `npm run test:browser` **57**, as of S02.5a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -130,6 +130,19 @@ The fix is `capForNode(degree)`: round for a degree-2 BEND (where the pavement g
 
 Same trap for shadows: an offset applied inside `ctx.rotate(rot)` rotates with the object. Use `offsetInRotatedFrame` to keep one fixed screen direction.
 
+### Pitfall: a missing pointer-cancel handler is invisible until someone alt-tabs
+
+The pointer handlers had **no** `pointercancel`, `lostpointercapture` or window-blur listener, so a pan interrupted by an alt-tab left the pan state set and the map dragged with no button held. No test noticed, because a browser test that never alt-tabs never cancels a pointer.
+
+Dispatch the events explicitly:
+
+```js
+document.getElementById('game').dispatchEvent(new PointerEvent('pointercancel'));
+window.dispatchEvent(new Event('blur'));
+```
+
+And release Playwright's held buttons afterwards (`page.mouse.up`), or the later clicks are swallowed by Playwright's button-state tracking rather than by the game.
+
 ### Pitfall: a tautological assertion moves both sides together
 
 A mutation that sets a constant to 0 will not fail a test written as `assert.equal(f(x), base + CONSTANT)`, because both sides become `base`. Assert the property POSITIVELY instead:
@@ -197,7 +210,7 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `npm run test:browser` | S02.1 | **Extended.** test/browser/ui.js: ui.css tokens vs uiTokens.js, measured contrast ratios, icon-map shape, emoji-free controls, real inventory badges, focus ring and reduced motion, depleted stock, inspector title, plus 60 tool-state captures at 1440x900 and 1024x768 |
 | `node scripts/mutate-s021.mjs` | S02.1 | Mutation harness for the S02.1 guards; applies each mutation, runs test/browser/ui.js, restores the file and prints which tests failed |
 | `npm run test:browser` | S02.4a | **Extended.** test/browser/ui.js gains the DPR1/DPR2 projection check, starter-region framing, Fit via button and shortcut, pointer-anchored zoom, and the HiDPI/wide capture matrix |
-| `npm run test:browser` | S02.4c | **Extended.** test/browser/ui.js gains a save/load test asserting the same building set comes back and every silhouette is still defined and oriented to its driveway |
+| `npm run test:browser` | S02.5a | **Extended.** test/browser/ui.js gains an interrupted-pointer test (pointercancel and window blur must end a pan and discard a draft), a double-click finaliser test (no zero-length road segment), and a menu-scoping test (no editing while the menu is open, Escape closes it, then shortcuts work again) |
 | `node scripts/mutate-s022a.mjs` | S02.2a | Mutation harness for the S02.2a guards (10 mutations, 10 caught) |
 | `node --test test/layers.test.js` | S02.2b | **Created.** Overlay model: layer declarations name a real data source, traffic bands and thresholds, per-edge traffic rows, building reachability, one-overlay-at-a-time. Pure, no browser |
 | `node scripts/mutate-s022b.mjs` | S02.2b | Mutation harness for the S02.2b guards (12 mutations, 12 caught after one ineffective target was replaced) |
@@ -212,6 +225,8 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node scripts/mutate-s024b.mjs` | S02.4b | Mutation harness for the S02.4b guards (17 mutations, 17 caught after three genuinely unobservable targets were made observable) |
 | `node --test test/buildings-view.test.js` | S02.4c | **Created.** Building silhouettes: variant determinism and range from the id, entry angle toward the driveway and its null cases, geometry for every (type, variant) with distinct shapes, footprint containment, entry-side placement of door details, determinism and the no-unseeded-randomness rule. Pure, no canvas |
 | `node scripts/mutate-s024c.mjs` | S02.4c | Mutation harness for the S02.4c guards (10 mutations, 9 caught; one proven untestable and dropped) |
+| `node --test test/input.test.js` | S02.5a | **Created.** Pointer intent, pan camera, draft-point dedup, the PointerTracker state machine, input-mode derivation, form-control detection, keyboard scoping (form controls, dialogs, panels, Space on a focused button, Enter with and without a draft, known keys). Pure, no canvas |
+| `node scripts/mutate-s025a.mjs` | S02.5a | Mutation harness for the S02.5a guards (14 mutations, 14 caught) |
 | `node scripts/probe-buildings.mjs` | S02.4c | **Created.** Captures the building silhouettes close up and reports the variant each building wears |
 | `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |

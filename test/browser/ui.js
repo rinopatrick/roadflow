@@ -1626,6 +1626,158 @@ test('ui: a building keeps its silhouette across a save and reload', async () =>
   }
 });
 
+test('ui: an interrupted pointer gesture does not leave the map dragging', async () => {
+  // The defect: there was NO pointercancel or window-blur handler, so a pan
+  // interrupted by an alt-tab left `panning` true and the map dragged with no
+  // button held.
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, seed: 1 });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // Start a pan with the middle button, then cancel the pointer mid-drag.
+    const camBefore = await page.evaluate(() => ({ ...window.__rf.renderer.cam }));
+    await page.mouse.move(600, 400);
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(700, 480);
+    const midPan = await page.evaluate(() => ({ ...window.__rf.renderer.cam }));
+    assert.ok(Math.abs(midPan.x - camBefore.x) > 1,
+      `the pan must have moved the camera (${camBefore.x} -> ${midPan.x})`);
+
+    await page.evaluate(() => {
+      document.getElementById('game').dispatchEvent(new PointerEvent('pointercancel'));
+    });
+    await page.mouse.up({ button: 'middle' });
+    await page.mouse.move(800, 560);
+    const after = await page.evaluate(() => ({ ...window.__rf.renderer.cam }));
+    assert.ok(Math.abs(after.x - midPan.x) < 1 && Math.abs(after.y - midPan.y) < 1,
+      `the map must not keep panning after pointercancel (${midPan.x},${midPan.y} -> ${after.x},${after.y})`);
+
+    // A window blur must also release the pan.
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(650, 430);
+    const midPan2 = await page.evaluate(() => ({ ...window.__rf.renderer.cam }));
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.mouse.move(750, 530);
+    const after2 = await page.evaluate(() => ({ ...window.__rf.renderer.cam }));
+    assert.ok(Math.abs(after2.x - midPan2.x) < 1 && Math.abs(after2.y - midPan2.y) < 1,
+      `the map must not keep panning after a window blur`);
+
+    // And a road draft is discarded on pointercancel, so a cancelled gesture
+    // cannot leave a half-drawn road on the map. The draft point must sit on
+    // buildable land, or nothing is pushed and there is nothing to cancel.
+    await page.keyboard.press('1');
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find a roadable point for the draft');
+    const [dsx, dsy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    // Playwright may still hold a button from the blur test; releasing first
+    // ensures the click lands as a left press.
+    await page.mouse.up({ button: 'left' });
+    await page.mouse.up({ button: 'middle' });
+    await page.mouse.click(dsx, dsy);
+    const draftBefore = await page.evaluate(() => window.__rf.draftLength);
+    assert.ok(draftBefore > 0, 'fixture must have an open draft');
+    await page.evaluate(() => {
+      document.getElementById('game').dispatchEvent(new PointerEvent('pointercancel'));
+    });
+    assert.equal(await page.evaluate(() => window.__rf.draftLength), 0,
+      'a pointercancel must discard an unfinished road draft');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: a double-click finaliser does not add a duplicate road point', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, seed: 1 });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    await page.keyboard.press('1');
+    await page.mouse.click(600, 400);
+    await page.mouse.click(800, 400);
+    await page.mouse.dblclick(1000, 400);
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    // The road must have been built: and the draft must be empty, with no
+    // zero-length segment between the two last clicks at the same pixel.
+    const result = await page.evaluate(() => {
+      const net = window.__rf.state.net;
+      let shortest = Infinity;
+      for (const e of net.edges.values()) {
+        for (let i = 1; i < e.pts.length; i++) {
+          shortest = Math.min(shortest, Math.hypot(
+            e.pts[i][0] - e.pts[i - 1][0], e.pts[i][1] - e.pts[i - 1][1]));
+        }
+      }
+      return { edges: net.edges.size, shortest: +shortest.toFixed(2) };
+    });
+    assert.ok(result.edges > 0, 'the double-click must have committed the road');
+    assert.ok(result.shortest > 1,
+      `the road must not contain a zero-length segment (shortest ${result.shortest} wu)`);
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: shortcuts do not edit the city while the menu is open', async () => {
+  // The defect: the keyboard guard checked ui.dialog but not ui.openPanel, so
+  // with the menu OPEN the digit shortcuts still placed roads underneath it.
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, seed: 1 });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    const before = await page.evaluate(() => ({
+      edges: window.__rf.state.net.edges.size,
+      buildings: window.__rf.state.eco.buildings.size,
+      tool: window.__rf.ui.snapshot().activeTool,
+    }));
+
+    // Open the menu, then try every editing key.
+    await page.click('#menubtn');
+    await page.waitForFunction(() => window.__rf.ui.snapshot().openPanel === 'menu', null, { timeout: 5000 });
+
+    for (const key of ['1', '2', '6', '9', 'f', 'Delete']) {
+      await page.keyboard.press(key);
+    }
+    // Space on the focused menu button must activate the button, not pause.
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(300);
+
+    const after = await page.evaluate(() => ({
+      edges: window.__rf.state.net.edges.size,
+      buildings: window.__rf.state.eco.buildings.size,
+      speed: window.__rf.world.settings.speed,
+    }));
+    assert.equal(after.edges, before.edges, 'no road may be built while the menu is open');
+    assert.equal(after.buildings, before.buildings, 'no building may be placed while the menu is open');
+
+    // Escape closes the menu, and then the shortcuts work again.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => window.__rf.ui.snapshot().openPanel === null, null, { timeout: 5000 });
+    await page.keyboard.press('1');
+    assert.equal(
+      await page.evaluate(() => window.__rf.ui.snapshot().activeTool), 'road',
+      'after Escape closes the menu, the tool shortcuts must work again');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

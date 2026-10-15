@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.4c",
+  "nextTask": "S02.5b",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1187,7 +1187,7 @@
     },
     {
       "id": "S02.4c",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.4b"
       ],
@@ -1227,6 +1227,11 @@
           "command": "node scripts/probe-buildings.mjs (capture pass)",
           "exitCode": 1,
           "result": "Inspected buildings-close-zoom2.2.png at 2.2x: the three types are distinguishable by SILHOUETTE (factory roof bays and chimney, shop awning band, house yard patches), not only by colour, and the driveway connector meets each building at its entry edge because the entry faces the road. The probe's own fixture placed only 4 of 7 buildings (the second row sat 130 wu from the road, past ACCESS_MAX_DISTANCE of 120, and one overlapped), and the probe exits 1 when placements are refused - the toasts named the reason correctly, so the refusals are the game working as designed, not a defect. Exit code 1 on the probe is a fixture problem, not a product one."
+        },
+        {
+          "command": "operator approval of S02.4c (and S02.1-S02.4 collectively)",
+          "exitCode": 0,
+          "result": "APPROVED. Operator accepted the building silhouettes, the entry orientation and the save/load stability, and approved stage-02 tasks S02.1 through S02.4 collectively. S02.5 is now eligible."
         }
       ],
       "notes": [
@@ -1236,6 +1241,51 @@
         "TWO SILHOUETTE DEFECTS WERE FOUND BY THE NEW TESTS, both invisible before because nothing asserted that a building is drawn at all: factory v0 and factory v2 had NO filled geometry, only stroked lines, so at any distance they read as the bare footprint with scratches. Both are now filled roof bays / sawtooth stripes, which is also more faithful to DESIGN's 'longer roof bays'.",
         "The entry-side rule is asserted: every 'yard' or 'accent' detail must sit on the +x side of the local frame, because +x is the side the renderer rotates toward the driveway. This caught the factory chimney facing the wrong way.",
         "Deliberately NOT done: colour redesign of the buildings (DESIGN section 3's colour palette is unchanged - only silhouette geometry and orientation moved), and any change to placement rules or collision sizes ('retain geometry size' - the footprint the collision and placement rules use is the same).",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 388/388, npm run test:browser 54/54, soak 10 trips, 9/10 mutations caught (one proven untestable and dropped)."
+      ]
+    },
+    {
+      "id": "S02.5a",
+      "status": "in_progress",
+      "dependsOn": [
+        "S02.4c"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/input.test.js (red, before src/input.js existed)",
+          "exitCode": 1,
+          "result": "RED with 'Cannot find module src/input.js'. Once the module existed, 21/23 passed and two failures were MY OWN test expectations, not the code: I expected the camera to move +20 wu in y when the pointer moved +40 px, but panning moves the camera OPPOSITE to the pointer (drag right -> camera left), so the correct value was -20. Both fixed in the test; the panCamera implementation was already correct."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 411, pass 411, fail 0. Was 388 before this task; +23 from test/input.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 57, pass 57, fail 0. Was 54; +3: an interrupted pointer gesture does not leave the map dragging (pointercancel AND window blur), a double-click finaliser does not add a duplicate road point (shortest segment > 1 wu), and shortcuts do not edit the city while the menu is open."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. The input extraction did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s025a.mjs (14 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "14 of 14 caught, none ineffective, on the FIRST run. A right click draws instead of panning -> 1. B shift+left draws -> 1. C pan ignores zoom -> 1. D pan reverses direction -> 1. E draft never deduplicated -> 1. F dedup threshold so large no point is pushed -> 1. G form control does not win -> 1. H SELECT not a form control -> 1. I open panel does not block shortcuts -> 1. J open dialog does not block -> 1. K Space always pauses -> 1. L tracker never leaves panning -> 1. M tracker never enters panning -> 1. N inputMode never reports drawing -> 1."
+        }
+      ],
+      "notes": [
+        "Created src/input.js (pointer intent, pan camera, draft-point dedup, PointerTracker, input mode derivation, keyboard scoping), test/input.test.js (23 tests), scripts/mutate-s025a.mjs. Modified src/main.js (pointer handlers replaced; the pan state and the draft push now use the pure module; pointercancel, lostpointercapture and window blur added; the keyboard handler replaced with the scoped decision).",
+        "FOUR DEFECTS WERE LIVE IN THE INLINE HANDLERS, all fixed. (1) No pointercancel, lostpointercapture or window-blur handler existed, so a pan interrupted by an alt-tab left `panning` true forever and the map dragged with no button held. (2) The dblclick finaliser added a duplicate final draft point, because the second click of a double-click fires pointerdown first; a zero-length final segment was built into the road. (3) The keyboard guard checked INPUT/TEXTAREA/contentEditable but not SELECT, and checked ui.dialog but not ui.openPanel, so with the MENU OPEN the digit shortcuts still placed roads underneath it. (4) Space called preventDefault unconditionally, blocking keyboard activation of any focused button.",
+        "All four are covered by unit tests in test/input.test.js and browser tests in test/browser/ui.js. The browser pan test dispatches a synthetic pointercancel and a synthetic window blur, and asserts the camera does not move afterwards; the menu test opens the menu, presses every editing key, and asserts no road or building is built; the Space test asserts that Space on a focused button returns 'none' with preventDefault false, so the browser default (button activation) is preserved.",
+        "The pointer state machine is in src/input.js and owns PANNING only; the road draft is game state and lives in main.js. `inputMode(tracker, hasDraft)` derives the three DESIGN states (idle / drawing / panning) from those two sources, so neither can drift from the other.",
+        "The road draft dedup threshold is 1 wu. A double-click at the same pixel produces a zero-distance duplicate, which is rejected; a deliberate 2 wu segment is kept. The whole map is 6000 wu, so 1 wu is far below any segment a player would draw.",
+        "Deliberately deferred to S02.5b: preview validity from evaluateBuildingPlacement, semantic dialog roles with focus trap and aria-live, slider labels and numeric alternatives, the keyboard construction cursor, and the keyboard-only walkthrough.",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
       ]
     },
@@ -1243,11 +1293,13 @@
       "id": "S02.5",
       "status": "pending",
       "dependsOn": [
-        "S02.4"
+        "S02.5a"
       ],
       "file": "stages/02-experience.md",
       "evidence": [],
-      "notes": []
+      "notes": [
+        "Split by AMEND-S02.5-split. REMAINING for S02.5b: preview validity from evaluateBuildingPlacement, semantic dialog roles with focus trap/initial/restore focus, polite aria-live, slider labels and numeric alternatives, the keyboard construction cursor (arrows 10 wu, shift 1 wu, Enter set, Finish commits), the keyboard-only walkthrough, and the remaining item 6 tests."
+      ]
     },
     {
       "id": "S02.6",
@@ -1641,6 +1693,21 @@
       ],
       "newTests": "test/camera.test.js (23 tests) covers the projection round trip at five view descriptions and five zooms, the device/CSS relationship, zoom clamping, anchored zoom, world bounds, fit framing including the margin and minimum span, and starter-region determinism, buildability, nearest-to-origin ordering, tie-breaking, the bounded fallback and rectangle options. test/browser/ui.js gains the DPR1/DPR2 projection check, starter framing, Fit via button and shortcut, pointer-anchored zoom, and the HiDPI/wide capture matrix. scripts/diagnose-projection.mjs re-measures the round trip on demand.",
       "operatorDecision": "No new decision was requested: the operator instructed work to continue, the split removes no requirement, and the same reasoning was accepted for S02.2 and S02.3."
+    },
+    {
+      "id": "AMEND-S02.5-split",
+      "date": "S02.5",
+      "oldAssumption": "S02.5 was one task: pointer states with pointercancel/lostcapture/blur handling, preview validity from evaluateBuildingPlacement, keyboard scoping and Escape ordering, semantic dialogs with focus trap and aria-live, a keyboard construction cursor, and a keyboard-only walkthrough.",
+      "evidence": "Reconnaissance of src/main.js found four independent defects in the input surface alone, none of which overlap the dialog/preview work: there is NO pointercancel, lostpointercapture or window blur handler, so a pan interrupted by an alt-tab leaves `panning` true forever and the map drags with no button held; the dblclick finaliser adds a duplicate final draft point, because the second click of the double-click fires pointerdown first; the keyboard guard checks INPUT/TEXTAREA/contentEditable but not SELECT, and checks `ui.dialog` but not `ui.openPanel`, so with the MENU OPEN the digit shortcuts still place roads and buildings underneath it; and Space calls preventDefault, which blocks a focused button from being activated by the keyboard at all.",
+      "newContract": "Split into S02.5a and S02.5b. S02.5a (this task): the input surface extracted to src/input.js with an explicit pointer state machine (idle/panning/drawing), pointercancel/lostpointercapture/window-blur handling, the double-click duplicate-point fix, keyboard scoping that ignores form controls AND open panels/dialogs, Space released so it activates a focused button, and Escape ordering preserved. S02.5b: preview validity driven by evaluateBuildingPlacement, semantic dialog roles with focus trap/initial focus/restore focus, polite aria-live, labels and numeric alternatives for every slider, the keyboard construction cursor (arrows 10 wu, shift 1 wu, Enter set, Finish button), the keyboard-only walkthrough, and the remaining item 6 tests. S02.5b depends on S02.5a.",
+      "affectedIds": [
+        "S02.5",
+        "S02.5a",
+        "S02.5b",
+        "S02.6"
+      ],
+      "newTests": "test/input.test.js (pure pointer-state machine and keyboard scoping) plus browser cases in test/browser/ui.js for pointercancel, drag outside the canvas, and no editing while a panel is open.",
+      "operatorDecision": "No new decision was requested: the operator instructed work to continue, the split removes no requirement, and the same reasoning was accepted for S02.2, S02.3 and S02.4."
     }
   ],
   "review": {
