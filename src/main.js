@@ -807,6 +807,7 @@ function boot() {
     frameStarter,
     fitCity,
     get camera() { return { ...renderer.cam }; },
+    get terrainStats() { return renderer.terrainStats(); },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };

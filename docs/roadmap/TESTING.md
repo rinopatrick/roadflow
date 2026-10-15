@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **350 passes** and `npm run test:browser` **53**, as of S02.4a. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **372 passes** and `npm run test:browser` **53**, as of S02.4b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -82,6 +82,22 @@ Two rules follow:
 2. Run the check at **DPR 2** as well as DPR 1. `launchGame({ deviceScaleFactor: 2 })` is one option.
 
 `node scripts/diagnose-projection.mjs` re-measures the round trip at both DPRs and prints the worst error; it should be 0 wu.
+
+### Pitfall: an axis-aligned fixture hides the other axis
+
+The terrain contour originally checked only the neighbour to the RIGHT in x. A horizontal shoreline — water above, grass below — drew no line at all while a vertical one did, and no test noticed, because every fixture boundary was vertical. The same blind spot appeared in S02.3b, where a straight-edge fixture could not detect a direction sign error because the two ends produced the same polygon.
+
+When a function behaves differently along x and y, the fixture must exercise BOTH axes. One vertical boundary and one horizontal boundary is the minimum.
+
+### Pitfall: an even offset cannot tell centre sampling from corner sampling
+
+A raster sampled at pixel CENTRES classifies a boundary at 256 wu one pixel earlier than one sampled at CORNERS. But that difference is only observable when the boundary sits at an ODD world offset: with a step of 2 wu, centres land on odd wu and corners on even, so at an even boundary the two classify identically and a test asserting the mapping is vacuous.
+
+Place boundary fixtures at odd offsets when the assertion is about exactly which pixel a transition lands on.
+
+### Pitfall: the identity tile hides an origin bug
+
+Tile (0,0) starts at world x=0, so a mutation that clamps the tile origin to zero is invisible against it — the clamp is the identity. Any assertion about per-tile addressing needs a tile whose origin is NOT zero; a negative tile is the clearest case.
 
 ### Pitfall: an incomplete mutation looks like a weak test
 
@@ -177,6 +193,9 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node scripts/mutate-s023b.mjs` | S02.3b | Mutation harness for the S02.3b guards (12 mutations, 12 caught after three ineffective targets exposed test gaps that were then fixed) |
 | `node --test test/camera.test.js` | S02.4a | **Created.** Projection round trip at five view descriptions and five zooms, device/CSS relationship, zoom clamping, pointer-anchored zoom, world bounds, fit framing with margin and minimum span, starter-region determinism/buildability/ordering/fallback. Pure, no canvas |
 | `node scripts/mutate-s024a.mjs` | S02.4a | Mutation harness for the S02.4a guards (22 mutations, 22 caught; supports multi-part mutations) |
+| `node --test test/terrain-view.test.js` | S02.4b | **Created.** Chunked terrain: tiling bounds, visible rect and tile counts at every viewport and zoom, per-tile raster mapping and opacity, contour on both axes, determinism and the no-unseeded-randomness rule, the bounded LRU cache, seeded decoration. Pure, no canvas |
+| `node scripts/mutate-s024b.mjs` | S02.4b | Mutation harness for the S02.4b guards (17 mutations, 17 caught after three genuinely unobservable targets were made observable) |
+| `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |
 | `npm run test:soak` | S00.2 | **Created.** Assertive economy browser soak |
 | `node --test test/simulationClock.test.js` | S01.1 | **Created.** Fixed-step clock, pause, stall dropping |

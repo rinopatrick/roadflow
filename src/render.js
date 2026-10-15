@@ -11,11 +11,13 @@ import { trafficOverlay, ACCESS_STATE } from './layers.js';
 import { laneMarkings, trimPolyline, trimPolylineEnds, offsetPolyline } from './render/markings.js';
 import { worldToCss, worldToDevice, cssToWorld, zoomAtPointer } from './camera.js';
 import {
+  tileWu, tileDetail, tilePx, visibleTiles, rasterizeTile,
+  decorativePatches, TileCache,
+} from './render/terrain.js';
+import {
   capForNode, junctionFootprint, edgeEndTrims, shadowOffset, offsetInRotatedFrame,
 } from './render/junctions.js';
 
-const WORLD_EXTENT = 3200;   // terrain rendered over [-E, E]
-const TERRAIN_RES = 1024;    // offscreen resolution
 const UI_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 
 /**
@@ -76,9 +78,12 @@ export class Renderer {
     this.cam = { x: 0, y: 0, zoom: 1 };
     // Which analytic overlay is showing is interface state and lives in
     // src/ui/controller.js. It arrives with each draw call as `state.overlay`.
-    this._terrain = null;
     this._terrainSeed = null;
     this._dpr = 1;
+    // Chunked terrain replaces the single 1024px texture (DESIGN section 4):
+    // 512 wu tiles at 256 px base resolution, 2x above DETAIL_ZOOM, bounded
+    // at MAX_TILES with LRU eviction. Only visible tiles are generated.
+    this._tiles = new TileCache();
   }
 
   /** CSS size plus DPR: the description the pure projection takes. */
@@ -128,77 +133,63 @@ export class Renderer {
     return zoomAtPointer(this.cam, this.view(), px, py, zoom);
   }
 
+  /** Terrain chunk activity this frame: tiles drawn, generated, and the cost. */
+  terrainStats() {
+    return {
+      ...(this._terrainCost || { tiles: 0, generated: 0, ms: 0 }),
+      cacheSize: this._tiles.size,
+      cacheMax: this._tiles.max,
+      detail: tileDetail(this.cam.zoom),
+    };
+  }
+
   // ---------- terrain ----------
+  /**
+   * Prepares decoration for a terrain seed. The terrain RASTER is no longer
+   * pre-built: it is generated per visible tile in `_drawTerrain`, so close
+   * zoom gets a 2x-detail raster instead of an upscaled 1024px image, and
+   * nothing is generated for parts of the map nobody can see.
+   */
   buildTerrain(terrain) {
-    const res = TERRAIN_RES;
-    const off = document.createElement('canvas');
-    off.width = res; off.height = res;
-    const c = off.getContext('2d');
-    const img = c.createImageData(res, res);
-    const E = WORLD_EXTENT;
-    const rng = makeRng(terrain.seed ^ 0x9e3779b9);
-
-    for (let py = 0; py < res; py++) {
-      for (let px = 0; px < res; px++) {
-        const wx = (px / res) * 2 * E - E;
-        const wy = (py / res) * 2 * E - E;
-        const b = terrain.sample(wx, wy);
-        let col;
-        if (b === BIOME.WATER) {
-          const n = terrain.elevation(wx, wy);
-          col = n < 0.22 ? PALETTE.water2 : PALETTE.water;
-        } else if (b === BIOME.SAND) col = PALETTE.sand;
-        else if (b === BIOME.ROCK) {
-          // elevation-shaded rock with high-frequency dithering (no flat blob)
-          const v = terrain.elevation(wx, wy);
-          const t = clamp((v - 0.7) / 0.22, 0, 1);
-          const n = terrain.elevation(wx * 7 + 13.7, wy * 7 - 7.3);
-          col = mixHex(PALETTE.rock, PALETTE.rock2, clamp(t * 0.85 + (n - 0.5) * 0.3, 0, 1));
-        }
-        else {
-          col = PALETTE.grass;
-          // subtle grass tone variation
-          const v = terrain.elevation(wx, wy);
-          if (v > 0.62) col = PALETTE.grass2;
-        }
-        const i = (py * res + px) * 4;
-        img.data[i] = parseInt(col.slice(1, 3), 16);
-        img.data[i + 1] = parseInt(col.slice(3, 5), 16);
-        img.data[i + 2] = parseInt(col.slice(5, 7), 16);
-        img.data[i + 3] = 255;
-      }
+    if (this._terrainSeed !== terrain.seed) {
+      this._blobs = decorativePatches(terrain);
+      this._terrainSeed = terrain.seed;
+      this._tiles.clear();
     }
-    c.putImageData(img, 0, 0);
+  }
 
-    // decorative blobby patches (dark grey "forests/rocks", olive fields)
-    const blobs = [];
-    for (let i = 0; i < 36; i++) {
-      const wx = (rng() * 2 - 1) * E * 0.9;
-      const wy = (rng() * 2 - 1) * E * 0.9;
-      if (terrain.sample(wx, wy) !== BIOME.GRASS) continue;
-      const kind = rng() < 0.6 ? 'patch' : 'patch2';
-      const r = 70 + rng() * 170;
-      const blob = { x: wx, y: wy, r, kind, trees: null };
-      if (kind === 'patch') {
-        // forests render as clusters of tree dots instead of a flat ellipse
-        blob.trees = [];
-        const n = 10 + Math.floor(rng() * 12);
-        for (let k = 0; k < n; k++) {
-          const a = rng() * Math.PI * 2;
-          const rr = Math.sqrt(rng()) * r * 0.85;
-          blob.trees.push([
-            Math.cos(a) * rr,
-            Math.sin(a) * rr * 0.72,
-            (6 + rng() * 9),
-            rng() < 0.5,
-          ]);
-        }
+  /**
+   * Draws the visible terrain tiles.
+   *
+   * A tile missing from the cache is rasterised on the spot, so the first
+   * frame after a pan pays for exactly the tiles it shows and later frames
+   * pay nothing. Generation cost is recorded in _terrainCost for inspection.
+   */
+  _drawTerrain(ctx, terrain, cam) {
+    const view = this.view();
+    const zoom = this.cam.zoom * this._dpr;
+    const detail = tileDetail(this.cam.zoom);
+    const tiles = visibleTiles(this.cam, view);
+    this._terrainCost = { tiles: tiles.length, generated: 0, ms: 0 };
+
+    for (const [gx, gy, spanWu] of tiles) {
+      let canvas = this._tiles.get(gx, gy, detail, spanWu);
+      if (!canvas) {
+        const t0 = performance.now();
+        const data = rasterizeTile(terrain, gx, gy, detail, spanWu);
+        const px = tilePx(detail);
+        canvas = document.createElement('canvas');
+        canvas.width = px;
+        canvas.height = px;
+        canvas.getContext('2d').putImageData(new ImageData(data, px, px), 0, 0);
+        this._tiles.put(gx, gy, detail, canvas, spanWu);
+        this._terrainCost.generated++;
+        this._terrainCost.ms += performance.now() - t0;
       }
-      blobs.push(blob);
+      const [sx, sy] = this.worldToScreen(gx * spanWu, gy * spanWu);
+      const w = spanWu * zoom;
+      ctx.drawImage(canvas, sx, sy, w, w);
     }
-    this._blobs = blobs;
-    this._terrain = off;
-    this._terrainSeed = terrain.seed;
   }
 
   // ---------- main draw ----------
@@ -206,19 +197,18 @@ export class Renderer {
     const { ctx, canvas } = this;
     const { net, traffic, eco, terrain, preview } = state;
     this._net = net;
-    if (!this._terrain || this._terrainSeed !== terrain.seed) this.buildTerrain(terrain);
+    if (this._terrainSeed !== terrain.seed) this.buildTerrain(terrain);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = PALETTE.water2;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const [ox, oy] = this.worldToScreen(0, 0);
     const zoom = this.cam.zoom * this._dpr;
 
-    // terrain (scaled offscreen, smooth)
+    // terrain: only the visible chunked tiles, each at its own detail level
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this._terrain, ox - WORLD_EXTENT * zoom, oy - WORLD_EXTENT * zoom, WORLD_EXTENT * 2 * zoom, WORLD_EXTENT * 2 * zoom);
+    this._drawTerrain(ctx, terrain, this.cam);
 
     // decorative patches (in world space)
     for (const b of this._blobs) {

@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
-  "nextTask": "S02.4b",
+  "nextTask": "S02.4c",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1056,7 +1056,65 @@
       "file": "stages/02-experience.md",
       "evidence": [],
       "notes": [
-        "Split by AMEND-S02.4-split. This task is now the REMAINING half and must not start until S02.4a is done: cached visible terrain chunks with a bounded LRU replacing the single blurry 1024 texture (S02.4a did not change terrain rendering at all), shoreline and rock contour accents derived from terrain class boundaries, stable seeded vegetation with lower detail at low zoom, three silhouette variants each for house/shop/factory oriented to their access node, consistent shadows and driveway anchors, and variant stability across save/load with no simulation RNG consumed by drawing."
+        "Split by AMEND-S02.4-split into S02.4a (camera, starter framing, Fit, DPR fix) and S02.4b (terrain chunking and contours). REMAINING for S02.4c: three silhouette variants each for house/shop/factory with entry orientation toward the access node, consistent shadows and driveway anchors, and variant stability across save/load with no simulation RNG consumed by drawing."
+      ]
+    },
+    {
+      "id": "S02.4b",
+      "status": "in_progress",
+      "dependsOn": [
+        "S02.4a"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/terrain-view.test.js (red, before src/render/terrain.js existed)",
+          "exitCode": 1,
+          "result": "RED with 'Cannot find module src/render/terrain.js'. Once the module existed the suite reached 14/20 and six failures, of which four were real implementation bugs the tests caught: the tiling used an INCLUSIVE upper bound and so generated a raster for a tile the frustum merely touches; visibleTiles added a full tile of margin around the frustum, tripling the tile count at normal zoom for no benefit; the detail threshold was >= rather than >, so zoom exactly 1.5 silently rasterised at double cost; and LOW_ZOOM was 0.25, at which a 1920x1080 viewport needs 78 tiles and exceeds the 64-tile cache bound — the bound is met at 0.5. The fifth and sixth failures were faults in my own tests: a TileCache call that omitted the span argument, and an eviction test that expected 1 hit when the fixture performs 2."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 372, pass 372, fail 0. Was 350 before this task; +22 from test/terrain-view.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 53, pass 53, fail 0. Unchanged count: the chunking is verified numerically by the unit suite and visually by the capture, and the existing HiDPI/wide matrix already exercises the renderer end to end at DPR 1 and 2."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. Terrain presentation did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s024b.mjs (17 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "17 of 17 caught, none ineffective, after a long diagnostic chain. A detail ignores DETAIL_ZOOM -> 1. B low-zoom coarsening removed -> 3. D contour removed -> 1. G raster not opaque -> 1. I visible rect halved -> 1. J inclusive far-edge tile -> 1. K visible tiles ignore the coarse span -> 2. L cache never evicts -> 1. M hit does not refresh recency -> 1. N cache key ignores the tile span -> 4. O unseeded decoration -> 2. P decoration on water -> 1. Q unseeded raster -> 1. THREE needed real work before they were catchable. C (corner instead of centre sampling) was a no-op because my boundary fixtures sat at EVEN world offsets, where corner and centre sampling classify identically; moving every fixture boundary to an odd offset makes the half-pixel shift observable, and C is now a two-part mutation mutating both axes. F (tile origin clamped to zero) was a no-op because the test only used tile (0,0), where the clamp is the identity; a negative-tile fixture catches it. E was badly written - my replacement evaluated to the CORRECT colour by operator precedence, so it proved nothing; rewritten to substitute the fill colour directly. Two further harness patterns went stale after the contour fix and were refreshed rather than counted."
+        },
+        {
+          "command": "node scripts/probe-terrain.mjs (chunking behaviour in the real renderer)",
+          "exitCode": 0,
+          "result": "At zoom 0.4 and 1 the terrain draws entirely from cache on the first frame after the camera settles (0 ms, 0 tiles generated). At zoom 3 four 512px detail tiles are generated once for 1059 ms, then 0 ms on every later frame. A 14-step pan sweep across the map peaked at 38 of 64 cache entries and never exceeded the bound. A zoom 3 -> 1 -> 3 cycle regenerated 0 tiles on returning, proving the cache actually serves what it stores. _terrainCost records tiles/generated/ms per frame and is exposed as __rf.terrainStats, so 'no per-frame full-world generation' is a measured number rather than an assumption.",
+          "artifact": "artifacts/terrain-1792037027221"
+        },
+        {
+          "command": "capture pass (artifacts/terrain-1792037027221)",
+          "exitCode": 0,
+          "result": "Inspected terrain-zoom0.4.png and terrain-zoom3.png. Both show grass, sand shoreline, water and rock rendered with correct colour mapping, and at zoom 3 the ground is sharp rather than the previous ~19-device-pixel blur of the single 1024px texture stretched over 6400 wu. The contour fix from this task is visible as a one-pixel darker line along the shoreline.",
+          "artifact": "artifacts/terrain-1792037027221"
+        }
+      ],
+      "notes": [
+        "Created src/render/terrain.js (tile constants and thresholds, tiling, visible rect, per-tile rasterisation with shoreline and rock contours, seeded decoration, the bounded LRU TileCache), test/terrain-view.test.js (22 tests), scripts/mutate-s024b.mjs, scripts/probe-terrain.mjs. Modified src/render.js (buildTerrain reduced to seed decoration and cache invalidation; the single-texture draw replaced by _drawTerrain, which rasterises only the visible tiles and records cost; WORLD_EXTENT and TERRAIN_RES deleted as dead; terrainStats() for observation), src/main.js (terrainStats exposed on __rf), docs/roadmap/TESTING.md.",
+        "THE BLUR IS GONE. The whole map was one 1024px texture over 6400x6400 wu, so one texture pixel covered ~6.25 wu: at zoom 3 on a HiDPI display that is a ~19 device-pixel blob, exactly the blur DESIGN section 4 calls out. Terrain is now 512 wu tiles at 256 px base resolution with a 2x raster above zoom 1.5, only the visible tiles exist, and the cache is bounded at 64 with LRU eviction. terrain.sample and isBuildable are untouched — buildability authority never moved.",
+        "A REAL CONTOUR DEFECT WAS FOUND AND FIXED BY THE TESTS. The first contour implementation checked only the neighbour to the right in x, so a shoreline running horizontally - water above, grass below - drew no line at all while a vertical one did. The new y-axis test failed against it immediately; the raster now checks both neighbours. This is the second time in two tasks that a fixture aligned on only one axis hid a defect on the other.",
+        "Coarse tiles below zoom 0.5 cover 2048 wu instead of 512. Without this, a 1440px viewport at the 0.12 minimum zoom spans 12000 wu and needs 336 tiles, which both breaks the 64-tile bound and regenerates the map every frame. The coarse span is part of the cache key, so a coarse tile cannot alias a fine one that shares its grid coordinate.",
+        "Measured, not assumed: the probe proves steady-state rasterisation is 0 ms (everything served from cache), the cache peaks at 38/64 across a full-map pan sweep, and revisiting a zoom regenerates nothing. The 1059 ms first-ever zoom-3 generation is a one-off for four 512px tiles and is the number to revisit if S08.1 budgets rendering.",
+        "The half-open tiling convention is deliberate: a tile is included only when the frustum overlaps it, not when it merely touches its far edge. The inclusive version generated rasters nothing could see.",
+        "Pixel centres, not corners, are sampled, and the tests now pin this exactly: every fixture boundary sits at an ODD world offset, where centre and corner sampling differ by one pixel. At even offsets the two classify identically and the assertion is vacuous - the same lesson as the symmetric-fixture pitfall in TESTING.md.",
+        "Deliberately deferred to S02.4c: the three silhouette variants per building type, entry orientation toward the access node, and variant stability across save/load. Buildings are still drawn by the unchanged _drawBuilding.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
       ]
     },
     {
