@@ -5,7 +5,7 @@
   "scope": "ambitious-roadmap",
   "language": "English",
   "publicationAuthorized": false,
-  "implementationAuthorized": "S00.1 only (operator prompt: 'Begin with task S00.1 only. Do not execute subsequent tasks.')",
+  "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
   "nextTask": "S02.6",
   "followUpsCompleted": [
     {
@@ -787,7 +787,8 @@
         "Two scope notes. (i) The plan's optional icon ids: save, load, close and help were added for existing controls; undo and layers were NOT added because no such control exists yet, and DESIGN.md section 1 forbids an inert future button. (ii) --line against the map grass measures 1.34:1. It is reported as informational rather than gated, because the 1px panel edge is decorative and the panel boundary is carried by the drop shadow; flagged for the human visual review.",
         "Deferred to its owning task: visible speed labels Pause/1x/3x/8x are S02.2 item 4 (S02.1 gives them non-emoji aria-labels only), and the layer toggles with legends are S02.2 item 3. The compact dock now fits by tightening padding at <=1100px rather than by hiding tools.",
         "STATUS: implementation and every required check in the task's Verify line pass. The task remains in_progress for one reason only - the stage's Approval clause (operator sign-off on the icon language and the base tokens) is not yet recorded, and the stage says not to accept screenshot differences automatically. S02.2 must not start until that sign-off is entered here. The full DESIGN.md section 7 rubric score belongs to the R1 gate at S02.6.",
-        "CLOSED. Re-verified after the approval decision: npm test 265/265 and npm run test:browser 30/30, zero failures. S02.2 is now eligible; it must not re-litigate these tokens, only build on them."
+        "CLOSED. Re-verified after the approval decision: npm test 265/265 and npm run test:browser 30/30, zero failures. S02.2 is now eligible; it must not re-litigate these tokens, only build on them.",
+        "Operator-approved."
       ]
     },
     {
@@ -843,7 +844,8 @@
         "New map confirms only when dirty, which is set by building a road, roundabout, traffic light or building, and by bulldozing. Save clears it. Autosave deliberately does NOT: the autosave slot is a safety net, not the player's save, so discarding the city still deserves a prompt.",
         "Deliberately deferred to S02.2b: the Traffic/Access/Pollution layer toggles with legends, the audio enable control, the Import/Export menu flows, depletion discoverability (reason plus progression link), and the full interaction matrix. The controller already carries `overlay` for them, and src/render.js is untouched, so no renderer change is needed until then.",
         "STATUS: implementation and every check in the task's Verify line pass. Held at in_progress because the operator asked for a review checkpoint at the end of each session, and the layout, the speed labels and the new menu are exactly what DESIGN section 7 wants a human to look at. Flip to done on approval.",
-        "CLOSED. Re-verified: npm test 265/265, npm run test:browser 38/38, soak 10 trips, 10/10 mutations caught."
+        "CLOSED. Re-verified: npm test 265/265, npm run test:browser 38/38, soak 10 trips, 10/10 mutations caught.",
+        "Operator-approved."
       ]
     },
     {
@@ -914,7 +916,8 @@
         "Deferred to S02.3: the traffic overlay's own visual refinement (junction mouth trim, junction fill polygons) is rendering work, not layer work. Deliberately NOT added: a Noise layer (no data, S06.3), and any Pollution layer (see above).",
         "STATUS: implementation and every check in the task's Verify line pass, including the full browser interaction matrix the task asked for. Held at in_progress for the operator review checkpoint, consistent with S02.1 and S02.2a.",
         "POST-REPORT FIX: the sound control diverged from the loaded world state (see the final evidence entry). This is the same class of defect S02.2 item 2 exists to prevent - one value owned by two places. Also added 5 unit tests in test/layers.test.js proving the upper traffic bands are reachable from real simulation rather than only from hand-written values: a standstill reaches the top band, every declared band is reachable across 0..1, the jammed threshold is inside what the sim produces, a jammed edge carries a vehicle count, and a clearing jam passes back down through every band. Verified with a real TrafficSim driven to a standstill, not by writing _congestion by hand.",
-        "CLOSED. The sound-control divergence found after the first report is fixed and covered by a regression test (mute, save, unmute, load, then assert both the world setting and the control)."
+        "CLOSED. The sound-control divergence found after the first report is fixed and covered by a regression test (mute, save, unmute, load, then assert both the world setting and the control).",
+        "Operator-approved."
       ]
     },
     {
@@ -987,7 +990,8 @@
         "Two guards were PROVEN redundant rather than assumed: deleting each left all 24 tests green. One was deleted with a comment; the other was kept as a documented contract statement. Both mutations were removed from the harness, so the honest tally is 10 caught out of 10 run, not 10 out of 12.",
         "Deliberately deferred to S02.3b: junction mouth trim derived from connected edge widths and tangent directions (S02.3a keeps the conservative width-only trim), conservative junction fill polygons, the single shadow direction, further render-pass separation, and the 12-scene contact sheet. Junction visual geometry is a separate, coupled change and does not belong in the same diff as the marking fix.",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
-        "CLOSED. Re-verified: npm test 309/309, npm run test:browser 48/48, soak 10 trips, 10/10 mutations caught."
+        "CLOSED. Re-verified: npm test 309/309, npm run test:browser 48/48, soak 10 trips, 10/10 mutations caught.",
+        "Operator-approved."
       ]
     },
     {
@@ -1044,7 +1048,8 @@
         "An `inset` option expands every quad outward, used so the junction outline continues the road casing instead of stepping wider or narrower. test/junctions.test.js asserts the inset widens each quad by exactly 2 * inset and extends the reach by exactly the inset, so the shape is preserved rather than distorted.",
         "Deliberately NOT done: the renderer was not extracted into src/render/roads.js. The task made that optional ('only if extracting road drawing reduces render.js without changing public Renderer API'), and render.js is still under 1000 lines with the geometry now living in render/markings.js and render/junctions.js. Extracting the drawing itself would be churn without a measured benefit.",
         "STATUS: implementation and every check pass, including the 12-scene contact sheet the task requires. Held at in_progress for the operator review checkpoint.",
-        "CLOSED. Re-verified: npm test 327/327, npm run test:browser 48/48, soak 10 trips, 12/12 mutations caught, 12/12 contact-sheet scenes."
+        "CLOSED. Re-verified: npm test 327/327, npm run test:browser 48/48, soak 10 trips, 12/12 mutations caught, 12/12 contact-sheet scenes.",
+        "Operator-approved."
       ]
     },
     {
@@ -1118,7 +1123,8 @@
         "The DPR2 and wide-layout captures are now part of the standing capture pass, which is what S02.4 owns (TESTING.md section 6: 'DPR1/2 on camera/road/input tasks; 1920x1080 for wide layout'). They assert geometry rather than only producing images: the backing store must be CSS size x DPR, and the band, dock and layer toggles must stay on screen.",
         "Deliberately deferred to S02.4b: cached terrain chunks with a bounded LRU, shoreline and rock contour accents, and the three building silhouette variants with entry orientation and save/load stability. Those are a coupled rendering change to the terrain and building passes and do not belong in the same diff as a camera correctness fix.",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
-        "CLOSED. Re-verified: npm test 350/350, npm run test:browser 53/53, soak 10 trips, 21/21 mutations caught."
+        "CLOSED. Re-verified: npm test 350/350, npm run test:browser 53/53, soak 10 trips, 21/21 mutations caught.",
+        "Operator-approved."
       ]
     },
     {
@@ -1182,7 +1188,8 @@
         "Pixel centres, not corners, are sampled, and the tests now pin this exactly: every fixture boundary sits at an ODD world offset, where centre and corner sampling differ by one pixel. At even offsets the two classify identically and the assertion is vacuous - the same lesson as the symmetric-fixture pitfall in TESTING.md.",
         "Deliberately deferred to S02.4c: the three silhouette variants per building type, entry orientation toward the access node, and variant stability across save/load. Buildings are still drawn by the unchanged _drawBuilding.",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
-        "CLOSED. Re-verified: npm test 372/372, npm run test:browser 53/53, soak 10 trips, 17/17 mutations caught, chunking measured (0 ms steady state, 38/64 worst cache occupancy)."
+        "CLOSED. Re-verified: npm test 372/372, npm run test:browser 53/53, soak 10 trips, 17/17 mutations caught, chunking measured (0 ms steady state, 38/64 worst cache occupancy).",
+        "Operator-approved."
       ]
     },
     {
@@ -1242,7 +1249,8 @@
         "The entry-side rule is asserted: every 'yard' or 'accent' detail must sit on the +x side of the local frame, because +x is the side the renderer rotates toward the driveway. This caught the factory chimney facing the wrong way.",
         "Deliberately NOT done: colour redesign of the buildings (DESIGN section 3's colour palette is unchanged - only silhouette geometry and orientation moved), and any change to placement rules or collision sizes ('retain geometry size' - the footprint the collision and placement rules use is the same).",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
-        "CLOSED. Re-verified: npm test 388/388, npm run test:browser 54/54, soak 10 trips, 9/10 mutations caught (one proven untestable and dropped)."
+        "CLOSED. Re-verified: npm test 388/388, npm run test:browser 54/54, soak 10 trips, 9/10 mutations caught (one proven untestable and dropped).",
+        "Operator-approved."
       ]
     },
     {
@@ -1292,7 +1300,8 @@
         "The road draft dedup threshold is 1 wu. A double-click at the same pixel produces a zero-distance duplicate, which is rejected; a deliberate 2 wu segment is kept. The whole map is 6000 wu, so 1 wu is far below any segment a player would draw.",
         "Deliberately deferred to S02.5b: preview validity from evaluateBuildingPlacement, semantic dialog roles with focus trap and aria-live, slider labels and numeric alternatives, the keyboard construction cursor, and the keyboard-only walkthrough.",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
-        "CLOSED. Re-verified: npm test 411/411, npm run test:browser 57/57, soak 10 trips, 14/14 mutations caught."
+        "CLOSED. Re-verified: npm test 411/411, npm run test:browser 57/57, soak 10 trips, 14/14 mutations caught.",
+        "Operator-approved."
       ]
     },
     {
@@ -1336,7 +1345,8 @@
         "Dialog semantics: the help overlay is now role=dialog aria-modal=true with a label, the menu popover is role=menu with a label, toasts are role=status aria-live=polite, and the inspector is role=complementary with a label. These are static attributes, so they are asserted without opening anything.",
         "Every light-inspector slider now has a for= label association and an aria-label, with three distinct names (Cycle length, Green ratio, Offset).",
         "Deliberately deferred: the focus trap with initial/restore focus (the help dialog and menu popover need focus management that is a larger change), and the keyboard construction cursor (arrow movement 10wu, shift 1wu, Enter set, Finish button commits) which is a new input mode. Both are S02.6 work.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "Operator-approved."
       ]
     },
     {
