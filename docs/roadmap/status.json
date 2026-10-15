@@ -1056,65 +1056,7 @@
       "file": "stages/02-experience.md",
       "evidence": [],
       "notes": [
-        "Split by AMEND-S02.4-split into S02.4a (camera, starter framing, Fit, DPR fix) and S02.4b (terrain chunking and contours). REMAINING for S02.4c: three silhouette variants each for house/shop/factory with entry orientation toward the access node, consistent shadows and driveway anchors, and variant stability across save/load with no simulation RNG consumed by drawing."
-      ]
-    },
-    {
-      "id": "S02.4b",
-      "status": "in_progress",
-      "dependsOn": [
-        "S02.4a"
-      ],
-      "file": "stages/02-experience.md",
-      "evidence": [
-        {
-          "command": "node --test test/terrain-view.test.js (red, before src/render/terrain.js existed)",
-          "exitCode": 1,
-          "result": "RED with 'Cannot find module src/render/terrain.js'. Once the module existed the suite reached 14/20 and six failures, of which four were real implementation bugs the tests caught: the tiling used an INCLUSIVE upper bound and so generated a raster for a tile the frustum merely touches; visibleTiles added a full tile of margin around the frustum, tripling the tile count at normal zoom for no benefit; the detail threshold was >= rather than >, so zoom exactly 1.5 silently rasterised at double cost; and LOW_ZOOM was 0.25, at which a 1920x1080 viewport needs 78 tiles and exceeds the 64-tile cache bound — the bound is met at 0.5. The fifth and sixth failures were faults in my own tests: a TileCache call that omitted the span argument, and an eviction test that expected 1 hit when the fixture performs 2."
-        },
-        {
-          "command": "npm test",
-          "exitCode": 0,
-          "result": "tests 372, pass 372, fail 0. Was 350 before this task; +22 from test/terrain-view.test.js. No existing test weakened or removed."
-        },
-        {
-          "command": "npm run test:browser",
-          "exitCode": 0,
-          "result": "tests 53, pass 53, fail 0. Unchanged count: the chunking is verified numerically by the unit suite and visually by the capture, and the existing HiDPI/wide matrix already exercises the renderer end to end at DPR 1 and 2."
-        },
-        {
-          "command": "npm run test:soak",
-          "exitCode": 0,
-          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. Terrain presentation did not disturb the simulation."
-        },
-        {
-          "command": "node scripts/mutate-s024b.mjs (17 mutations, each restored after the run)",
-          "exitCode": 0,
-          "result": "17 of 17 caught, none ineffective, after a long diagnostic chain. A detail ignores DETAIL_ZOOM -> 1. B low-zoom coarsening removed -> 3. D contour removed -> 1. G raster not opaque -> 1. I visible rect halved -> 1. J inclusive far-edge tile -> 1. K visible tiles ignore the coarse span -> 2. L cache never evicts -> 1. M hit does not refresh recency -> 1. N cache key ignores the tile span -> 4. O unseeded decoration -> 2. P decoration on water -> 1. Q unseeded raster -> 1. THREE needed real work before they were catchable. C (corner instead of centre sampling) was a no-op because my boundary fixtures sat at EVEN world offsets, where corner and centre sampling classify identically; moving every fixture boundary to an odd offset makes the half-pixel shift observable, and C is now a two-part mutation mutating both axes. F (tile origin clamped to zero) was a no-op because the test only used tile (0,0), where the clamp is the identity; a negative-tile fixture catches it. E was badly written - my replacement evaluated to the CORRECT colour by operator precedence, so it proved nothing; rewritten to substitute the fill colour directly. Two further harness patterns went stale after the contour fix and were refreshed rather than counted."
-        },
-        {
-          "command": "node scripts/probe-terrain.mjs (chunking behaviour in the real renderer)",
-          "exitCode": 0,
-          "result": "At zoom 0.4 and 1 the terrain draws entirely from cache on the first frame after the camera settles (0 ms, 0 tiles generated). At zoom 3 four 512px detail tiles are generated once for 1059 ms, then 0 ms on every later frame. A 14-step pan sweep across the map peaked at 38 of 64 cache entries and never exceeded the bound. A zoom 3 -> 1 -> 3 cycle regenerated 0 tiles on returning, proving the cache actually serves what it stores. _terrainCost records tiles/generated/ms per frame and is exposed as __rf.terrainStats, so 'no per-frame full-world generation' is a measured number rather than an assumption.",
-          "artifact": "artifacts/terrain-1792037027221"
-        },
-        {
-          "command": "capture pass (artifacts/terrain-1792037027221)",
-          "exitCode": 0,
-          "result": "Inspected terrain-zoom0.4.png and terrain-zoom3.png. Both show grass, sand shoreline, water and rock rendered with correct colour mapping, and at zoom 3 the ground is sharp rather than the previous ~19-device-pixel blur of the single 1024px texture stretched over 6400 wu. The contour fix from this task is visible as a one-pixel darker line along the shoreline.",
-          "artifact": "artifacts/terrain-1792037027221"
-        }
-      ],
-      "notes": [
-        "Created src/render/terrain.js (tile constants and thresholds, tiling, visible rect, per-tile rasterisation with shoreline and rock contours, seeded decoration, the bounded LRU TileCache), test/terrain-view.test.js (22 tests), scripts/mutate-s024b.mjs, scripts/probe-terrain.mjs. Modified src/render.js (buildTerrain reduced to seed decoration and cache invalidation; the single-texture draw replaced by _drawTerrain, which rasterises only the visible tiles and records cost; WORLD_EXTENT and TERRAIN_RES deleted as dead; terrainStats() for observation), src/main.js (terrainStats exposed on __rf), docs/roadmap/TESTING.md.",
-        "THE BLUR IS GONE. The whole map was one 1024px texture over 6400x6400 wu, so one texture pixel covered ~6.25 wu: at zoom 3 on a HiDPI display that is a ~19 device-pixel blob, exactly the blur DESIGN section 4 calls out. Terrain is now 512 wu tiles at 256 px base resolution with a 2x raster above zoom 1.5, only the visible tiles exist, and the cache is bounded at 64 with LRU eviction. terrain.sample and isBuildable are untouched — buildability authority never moved.",
-        "A REAL CONTOUR DEFECT WAS FOUND AND FIXED BY THE TESTS. The first contour implementation checked only the neighbour to the right in x, so a shoreline running horizontally - water above, grass below - drew no line at all while a vertical one did. The new y-axis test failed against it immediately; the raster now checks both neighbours. This is the second time in two tasks that a fixture aligned on only one axis hid a defect on the other.",
-        "Coarse tiles below zoom 0.5 cover 2048 wu instead of 512. Without this, a 1440px viewport at the 0.12 minimum zoom spans 12000 wu and needs 336 tiles, which both breaks the 64-tile bound and regenerates the map every frame. The coarse span is part of the cache key, so a coarse tile cannot alias a fine one that shares its grid coordinate.",
-        "Measured, not assumed: the probe proves steady-state rasterisation is 0 ms (everything served from cache), the cache peaks at 38/64 across a full-map pan sweep, and revisiting a zoom regenerates nothing. The 1059 ms first-ever zoom-3 generation is a one-off for four 512px tiles and is the number to revisit if S08.1 budgets rendering.",
-        "The half-open tiling convention is deliberate: a tile is included only when the frustum overlaps it, not when it merely touches its far edge. The inclusive version generated rasters nothing could see.",
-        "Pixel centres, not corners, are sampled, and the tests now pin this exactly: every fixture boundary sits at an ODD world offset, where centre and corner sampling differ by one pixel. At even offsets the two classify identically and the assertion is vacuous - the same lesson as the symmetric-fixture pitfall in TESTING.md.",
-        "Deliberately deferred to S02.4c: the three silhouette variants per building type, entry orientation toward the access node, and variant stability across save/load. Buildings are still drawn by the unchanged _drawBuilding.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "Split by AMEND-S02.4-split into S02.4a (camera, starter framing, Fit, DPR fix), S02.4b (terrain chunking and contours) and S02.4c (building silhouettes). ALL THREE DONE. S02.4a fixed the DPR projection defect, added the deterministic starter region, fit-city and pointer-anchored zoom. S02.4b replaced the single 1024px texture with bounded cached 512 wu tiles and added shoreline/rock contours. S02.4c gave each building three id-keyed silhouettes oriented to its driveway."
       ]
     },
     {
@@ -1177,6 +1119,124 @@
         "Deliberately deferred to S02.4b: cached terrain chunks with a bounded LRU, shoreline and rock contour accents, and the three building silhouette variants with entry orientation and save/load stability. Those are a coupled rendering change to the terrain and building passes and do not belong in the same diff as a camera correctness fix.",
         "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
         "CLOSED. Re-verified: npm test 350/350, npm run test:browser 53/53, soak 10 trips, 21/21 mutations caught."
+      ]
+    },
+    {
+      "id": "S02.4b",
+      "status": "done",
+      "dependsOn": [
+        "S02.4a"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/terrain-view.test.js (red, before src/render/terrain.js existed)",
+          "exitCode": 1,
+          "result": "RED with 'Cannot find module src/render/terrain.js'. Once the module existed the suite reached 14/20 and six failures, of which four were real implementation bugs the tests caught: the tiling used an INCLUSIVE upper bound and so generated a raster for a tile the frustum merely touches; visibleTiles added a full tile of margin around the frustum, tripling the tile count at normal zoom for no benefit; the detail threshold was >= rather than >, so zoom exactly 1.5 silently rasterised at double cost; and LOW_ZOOM was 0.25, at which a 1920x1080 viewport needs 78 tiles and exceeds the 64-tile cache bound — the bound is met at 0.5. The fifth and sixth failures were faults in my own tests: a TileCache call that omitted the span argument, and an eviction test that expected 1 hit when the fixture performs 2."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 372, pass 372, fail 0. Was 350 before this task; +22 from test/terrain-view.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 53, pass 53, fail 0. Unchanged count: the chunking is verified numerically by the unit suite and visually by the capture, and the existing HiDPI/wide matrix already exercises the renderer end to end at DPR 1 and 2."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. Terrain presentation did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s024b.mjs (17 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "17 of 17 caught, none ineffective, after a long diagnostic chain. A detail ignores DETAIL_ZOOM -> 1. B low-zoom coarsening removed -> 3. D contour removed -> 1. G raster not opaque -> 1. I visible rect halved -> 1. J inclusive far-edge tile -> 1. K visible tiles ignore the coarse span -> 2. L cache never evicts -> 1. M hit does not refresh recency -> 1. N cache key ignores the tile span -> 4. O unseeded decoration -> 2. P decoration on water -> 1. Q unseeded raster -> 1. THREE needed real work before they were catchable. C (corner instead of centre sampling) was a no-op because my boundary fixtures sat at EVEN world offsets, where corner and centre sampling classify identically; moving every fixture boundary to an odd offset makes the half-pixel shift observable, and C is now a two-part mutation mutating both axes. F (tile origin clamped to zero) was a no-op because the test only used tile (0,0), where the clamp is the identity; a negative-tile fixture catches it. E was badly written - my replacement evaluated to the CORRECT colour by operator precedence, so it proved nothing; rewritten to substitute the fill colour directly. Two further harness patterns went stale after the contour fix and were refreshed rather than counted."
+        },
+        {
+          "command": "node scripts/probe-terrain.mjs (chunking behaviour in the real renderer)",
+          "exitCode": 0,
+          "result": "At zoom 0.4 and 1 the terrain draws entirely from cache on the first frame after the camera settles (0 ms, 0 tiles generated). At zoom 3 four 512px detail tiles are generated once for 1059 ms, then 0 ms on every later frame. A 14-step pan sweep across the map peaked at 38 of 64 cache entries and never exceeded the bound. A zoom 3 -> 1 -> 3 cycle regenerated 0 tiles on returning, proving the cache actually serves what it stores. _terrainCost records tiles/generated/ms per frame and is exposed as __rf.terrainStats, so 'no per-frame full-world generation' is a measured number rather than an assumption.",
+          "artifact": "artifacts/terrain-1792037027221"
+        },
+        {
+          "command": "capture pass (artifacts/terrain-1792037027221)",
+          "exitCode": 0,
+          "result": "Inspected terrain-zoom0.4.png and terrain-zoom3.png. Both show grass, sand shoreline, water and rock rendered with correct colour mapping, and at zoom 3 the ground is sharp rather than the previous ~19-device-pixel blur of the single 1024px texture stretched over 6400 wu. The contour fix from this task is visible as a one-pixel darker line along the shoreline.",
+          "artifact": "artifacts/terrain-1792037027221"
+        },
+        {
+          "command": "operator approval of S02.4b",
+          "exitCode": 0,
+          "result": "APPROVED. Operator accepted the chunked terrain, the measured cache behaviour and the contour fix. S02.4c is now eligible."
+        }
+      ],
+      "notes": [
+        "Created src/render/terrain.js (tile constants and thresholds, tiling, visible rect, per-tile rasterisation with shoreline and rock contours, seeded decoration, the bounded LRU TileCache), test/terrain-view.test.js (22 tests), scripts/mutate-s024b.mjs, scripts/probe-terrain.mjs. Modified src/render.js (buildTerrain reduced to seed decoration and cache invalidation; the single-texture draw replaced by _drawTerrain, which rasterises only the visible tiles and records cost; WORLD_EXTENT and TERRAIN_RES deleted as dead; terrainStats() for observation), src/main.js (terrainStats exposed on __rf), docs/roadmap/TESTING.md.",
+        "THE BLUR IS GONE. The whole map was one 1024px texture over 6400x6400 wu, so one texture pixel covered ~6.25 wu: at zoom 3 on a HiDPI display that is a ~19 device-pixel blob, exactly the blur DESIGN section 4 calls out. Terrain is now 512 wu tiles at 256 px base resolution with a 2x raster above zoom 1.5, only the visible tiles exist, and the cache is bounded at 64 with LRU eviction. terrain.sample and isBuildable are untouched — buildability authority never moved.",
+        "A REAL CONTOUR DEFECT WAS FOUND AND FIXED BY THE TESTS. The first contour implementation checked only the neighbour to the right in x, so a shoreline running horizontally - water above, grass below - drew no line at all while a vertical one did. The new y-axis test failed against it immediately; the raster now checks both neighbours. This is the second time in two tasks that a fixture aligned on only one axis hid a defect on the other.",
+        "Coarse tiles below zoom 0.5 cover 2048 wu instead of 512. Without this, a 1440px viewport at the 0.12 minimum zoom spans 12000 wu and needs 336 tiles, which both breaks the 64-tile bound and regenerates the map every frame. The coarse span is part of the cache key, so a coarse tile cannot alias a fine one that shares its grid coordinate.",
+        "Measured, not assumed: the probe proves steady-state rasterisation is 0 ms (everything served from cache), the cache peaks at 38/64 across a full-map pan sweep, and revisiting a zoom regenerates nothing. The 1059 ms first-ever zoom-3 generation is a one-off for four 512px tiles and is the number to revisit if S08.1 budgets rendering.",
+        "The half-open tiling convention is deliberate: a tile is included only when the frustum overlaps it, not when it merely touches its far edge. The inclusive version generated rasters nothing could see.",
+        "Pixel centres, not corners, are sampled, and the tests now pin this exactly: every fixture boundary sits at an ODD world offset, where centre and corner sampling differ by one pixel. At even offsets the two classify identically and the assertion is vacuous - the same lesson as the symmetric-fixture pitfall in TESTING.md.",
+        "Deliberately deferred to S02.4c: the three silhouette variants per building type, entry orientation toward the access node, and variant stability across save/load. Buildings are still drawn by the unchanged _drawBuilding.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 372/372, npm run test:browser 53/53, soak 10 trips, 17/17 mutations caught, chunking measured (0 ms steady state, 38/64 worst cache occupancy)."
+      ]
+    },
+    {
+      "id": "S02.4c",
+      "status": "in_progress",
+      "dependsOn": [
+        "S02.4b"
+      ],
+      "file": "stages/02-experience.md",
+      "evidence": [
+        {
+          "command": "node --test test/buildings-view.test.js (red, before src/render/buildings.js existed)",
+          "exitCode": 1,
+          "result": "RED with 'Cannot find module src/render/buildings.js'. Once the module existed, 13/15 passed and two failures were real: 'the entry angle is exact for the four cardinal directions' failed because MY FIXTURE had the directions inverted (I placed the building east of the node and labelled the expected angle 0, when the angle from building TO node is pi) - fixed in the test; and 'factory v1: an entry detail sits at x=-0.3, which faces AWAY from the driveway' exposed a real geometry bug: the factory chimney was on the BACK of the lot. Fixed by moving the chimney to the loading (entry) side."
+        },
+        {
+          "command": "node --test test/buildings-view.test.js (second red, after adding the filled-shape rule)",
+          "exitCode": 1,
+          "result": "Adding 'every variant carries a filled shape' found two more real defects in the silhouette table: factory v0 (three roof bays) and factory v2 (sawtooth) were drawn as STROKED LINES with no filled geometry at all, so at any distance they read as the bare footprint with scratches. Both are now filled rects, which is also more faithful to DESIGN's 'longer roof bays'."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 388, pass 388, fail 0. Was 372 before this task; +16 from test/buildings-view.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 54, pass 54, fail 0. Was 53; +1: a building keeps its silhouette across a save and reload, and every reloaded building's entry angle is defined and points at its driveway node. The first version of this test reloaded the PAGE, which re-runs boot whose confirm dialog the harness auto-dismisses, so the city silently restarted and the test timed out waiting for buildings that no longer existed. It now loads in-session through the menu, which replaces the world from the snapshot and rehydrates the same building ids - the thing actually under test."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. Building presentation did not disturb the simulation."
+        },
+        {
+          "command": "node scripts/mutate-s024c.mjs (10 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "9 of 10 caught. A constant variant -> 2. B variant out of range -> 2. D entry angle reversed -> 3. E missing driveway guessed instead of null -> 1. F coincident driveway guessed -> 1. G one variant reuses another's geometry -> 2. I geometry spills past the footprint -> 1. J the shop awning moves to the back of the lot -> 1. ONE mutation was proven UNTESTABLE and dropped rather than counted: 'C: the variant uses a different hash function' (a different deterministic hash of the id) came back NO FAILURE because the contract is 'the variant is a deterministic function of the id', which the alternative hash also satisfies. No test can distinguish two hash functions that both meet the contract, so the FNV choice is an implementation detail. This is a different category from S02.4a's mutation N, which was a coverage gap that a portrait fixture fixed."
+        },
+        {
+          "command": "node scripts/probe-buildings.mjs (capture pass)",
+          "exitCode": 1,
+          "result": "Inspected buildings-close-zoom2.2.png at 2.2x: the three types are distinguishable by SILHOUETTE (factory roof bays and chimney, shop awning band, house yard patches), not only by colour, and the driveway connector meets each building at its entry edge because the entry faces the road. The probe's own fixture placed only 4 of 7 buildings (the second row sat 130 wu from the road, past ACCESS_MAX_DISTANCE of 120, and one overlapped), and the probe exits 1 when placements are refused - the toasts named the reason correctly, so the refusals are the game working as designed, not a defect. Exit code 1 on the probe is a fixture problem, not a product one."
+        }
+      ],
+      "notes": [
+        "Created src/render/buildings.js (variant hash, entry angle, the silhouette table), test/buildings-view.test.js (16 tests), scripts/mutate-s024c.mjs. Modified src/render.js (_drawBuilding now rotates to the ENTRY angle from the driveway node instead of the stored cosmetic rot, and draws the variant's silhouette details from the table after the base faces; the shadow offset is counter-rotated against the new facing), src/main.js (buildingVariant exposed on __rf), docs/roadmap/TESTING.md.",
+        "ORIENTATION MOVED FROM STORED STATE TO DERIVED STATE. `_drawBuilding` used to rotate by `b.rot`, a value written once at placement from the economy's cosmetic RNG stream, which had no relationship to the road. The entry now faces the driveway node, computed at draw time by `entryAngle` from the live network - so if a road is rebuilt the building re-faces it. The stored `rot` field is untouched in the world record and in saves, so save compatibility is unchanged; it is simply no longer what the drawing uses, and a building with no driveway falls back to it rather than snapping to a guess.",
+        "THE SILHOUETTE TABLE IS A CONSTANT, NOT GENERATED. Three variants per type must be VISIBLY distinct shapes (DESIGN section 7 scores recognisability without colour alone), which is easier to guarantee - and test - when each variant is written out and asserted to differ in shape rather than only in fill role.",
+        "TWO SILHOUETTE DEFECTS WERE FOUND BY THE NEW TESTS, both invisible before because nothing asserted that a building is drawn at all: factory v0 and factory v2 had NO filled geometry, only stroked lines, so at any distance they read as the bare footprint with scratches. Both are now filled roof bays / sawtooth stripes, which is also more faithful to DESIGN's 'longer roof bays'.",
+        "The entry-side rule is asserted: every 'yard' or 'accent' detail must sit on the +x side of the local frame, because +x is the side the renderer rotates toward the driveway. This caught the factory chimney facing the wrong way.",
+        "Deliberately NOT done: colour redesign of the buildings (DESIGN section 3's colour palette is unchanged - only silhouette geometry and orientation moved), and any change to placement rules or collision sizes ('retain geometry size' - the footprint the collision and placement rules use is the same).",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
       ]
     },
     {

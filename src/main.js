@@ -14,6 +14,7 @@ import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { reconcileTrafficAfterEdit } from './access.js';
 import { LEVEL_XP } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
+import { buildingVariant } from './render/buildings.js';
 import { trafficOverlay, accessOverlay, accessSummary, ACCESS_STATE, TRAFFIC_BANDS } from './layers.js';
 import { ui } from './ui/controller.js';
 import { buildToolbar, setTool, TOOLS } from './ui/toolbar.js';
@@ -808,6 +809,8 @@ function boot() {
     fitCity,
     get camera() { return { ...renderer.cam }; },
     get terrainStats() { return renderer.terrainStats(); },
+    // The silhouette selector, so a test can assert what will be drawn.
+    buildingVariant,
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };

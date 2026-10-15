@@ -1533,6 +1533,99 @@ test('ui: captures the HiDPI and wide layouts', async () => {
   }
 });
 
+test('ui: a building keeps its silhouette across a save and reload', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, seed: 7 });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // Build a road and one of each building type, well inside the view.
+    await page.keyboard.press('2');
+    await page.mouse.click(500, 460);
+    await page.mouse.click(940, 460);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+
+    const placed = [];
+    for (const [tool, dx] of [['6', 560], ['7', 700], ['8', 860]]) {
+      await page.keyboard.press(tool);
+      await page.mouse.click(dx, 380);
+      await page.waitForTimeout(120);
+    }
+    await page.waitForFunction(() => window.__rf.state.eco.buildings.size >= 3, null, { timeout: 10000 });
+
+    // Record what the renderer will draw for each building: the variant from
+    // its id, and the entry angle from its driveway node.
+    const before = await page.evaluate(() =>
+      [...window.__rf.state.eco.buildings.values()].map(b => ({
+        id: b.id,
+        type: b.type,
+        x: b.x, y: b.y,
+        driveway: b.drivewayNode,
+      })));
+    assert.equal(before.length, 3, `fixture must place three buildings, got ${before.length}`);
+
+    await menuAction(page, 'btnSave');
+    await page.waitForTimeout(300);
+
+    // Load in-session via the menu rather than reloading the page: a page reload
+    // re-runs boot, whose confirm dialog the harness auto-dismisses, so the city
+    // would silently restart and this would test the boot flow instead of the
+    // silhouette. `btnLoad` replaces the world from the snapshot, which
+    // rehydrates the same building ids - exactly what must decide the silhouettes.
+    await menuAction(page, 'btnLoad');
+    await page.waitForFunction(() => window.__rf.state.eco.buildings.size >= 3, null, { timeout: 10000 });
+
+    const after = await page.evaluate(() =>
+      [...window.__rf.state.eco.buildings.values()].map(b => ({
+        id: b.id,
+        type: b.type,
+        x: b.x, y: b.y,
+        driveway: b.drivewayNode,
+      })));
+
+    const key = (b) => `${b.id}|${b.type}|${Math.round(b.x)}|${Math.round(b.y)}`;
+    const beforeKeys = before.map(key).sort();
+    const afterKeys = after.map(key).sort();
+    assert.deepEqual(afterKeys, beforeKeys,
+      'the reloaded buildings must be the same set: the silhouette comes from the id');
+
+    // The silhouette is a pure function of the id, so assert it directly for
+    // both the pre-save and post-load building sets.
+    const variants = await page.evaluate(() =>
+      [...window.__rf.state.eco.buildings.values()].map(b => ({
+        id: b.id,
+        variant: window.__rf.buildingVariant(b.id),
+      })));
+    for (const v of variants) {
+      assert.ok(before.some(b => b.id === v.id), `reloaded building ${v.id} existed before the load`);
+      assert.ok(Number.isInteger(v.variant) && v.variant >= 0 && v.variant < 3,
+        `${v.id}: variant ${v.variant} must be a real variant index`);
+    }
+    // Every entry must face its driveway: the renderer rotates by the angle
+    // from the building to the driveway node, so assert it is defined.
+    const facing = await page.evaluate(() => {
+      const { state } = window.__rf;
+      return [...state.eco.buildings.values()].map(b => {
+        const n = state.net.nodes.get(b.drivewayNode);
+        if (!n) return { id: b.id, ok: false, why: 'no driveway node' };
+        const a = Math.atan2(n.y - b.y, n.x - b.x);
+        return { id: b.id, ok: true, a, dx: n.x - b.x, dy: n.y - b.y };
+      });
+    });
+    for (const f of facing) {
+      assert.ok(f.ok, `${f.id}: ${f.why}`);
+      assert.ok(Math.abs(f.a) <= Math.PI, `${f.id}: entry angle must be a real angle`);
+    }
+
+    await page.screenshot({ path: `${shots}/ui-buildings-desktop-1440x900-seed7.png` });
+    assert.deepEqual(run.errors.filter(e => !/favicon/.test(e)), [], 'no console errors');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {
