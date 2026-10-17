@@ -19,6 +19,11 @@ import { ConstructionCursor, arrowDirection } from './construction.js';
 import { createHistory, COMMAND_KIND } from './worldCommands.js';
 import { evaluateRoadDraft, DRAFT_MODE } from './roadDraft.js';
 import { evaluateGridDraft } from './gridDraft.js';
+import { roadDimensions } from './roadProfiles.js';
+import {
+  UPGRADE_CLASSES, ROUNDABOUT_RADIUS,
+  validateRoadUpgrade, validateRoundaboutRadius, demolitionPreview,
+} from './constructionEdits.js';
 import { buildingVariant } from './render/buildings.js';
 import {
   pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
@@ -381,6 +386,13 @@ function reselectEntity(sel) {
     if (!b) return;
     selected = sel;
     openBuildingInspect(b);
+    return;
+  }
+  if (sel.kind === 'edge') {
+    const e = net.edges.get(sel.id);
+    if (!e) return;
+    selected = sel;
+    openRoadInspect(e);
   }
 }
 
@@ -634,6 +646,61 @@ function openBuildingInspect(b) {
       `, undefined, b.type);
 }
 
+/**
+ * The road inspector: what the road is, and the in-place upgrade controls.
+ *
+ * An upgrade keeps the edge ID and its topology, so active cars keep their
+ * routes. Every option is validated BEFORE the click, so a disabled button
+ * carries the reason it is unavailable rather than failing on commit.
+ */
+function openRoadInspect(edge) {
+  const dim = roadDimensions(edge);
+  let rows = '';
+  for (const cls of UPGRADE_CLASSES) {
+    const current = cls === edge.cls;
+    const check = current ? null : validateRoadUpgrade(getWorld(), edge.id, cls);
+    const why = current ? 'already this class' : (check.ok ? '' : check.reason);
+    const dis = current || !check.ok;
+    rows += '<button class="menu-btn" data-upgrade="' + cls + '"'
+      + (dis ? ' disabled' : '')
+      + ' style="width:100%;justify-content:center;border:1px solid var(--line);'
+      + 'border-radius:var(--radius-sm);margin-top:4px'
+      + (dis ? ';opacity:.55' : '') + '">'
+      + cls.charAt(0).toUpperCase() + cls.slice(1)
+      + (current ? ' (current)' : '') + '</button>';
+    if (why) {
+      rows += '<div class="row"><span style="color:var(--muted);font-size:11px">'
+        + why + '</span></div>';
+    }
+  }
+
+  openInspect(edge.cls.charAt(0).toUpperCase() + edge.cls.slice(1) + ' road', ''
+    + '<div class="row"><span>Lanes</span><span class="v">'
+    + (dim.forward + dim.backward) + '</span></div>'
+    + '<div class="row"><span>Width</span><span class="v">'
+    + dim.width.toFixed(0) + ' wu</span></div>'
+    + '<div class="row"><span>Speed</span><span class="v">'
+    + dim.speed + ' wu/s</span></div>'
+    + '<div class="row"><span>Length</span><span class="v">'
+    + edge.total.toFixed(0) + ' wu</span></div>'
+    + '<label>Upgrade in place</label>'
+    + rows, undefined, 'road');
+
+  document.getElementById('insBody').querySelectorAll('[data-upgrade]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cls = btn.dataset.upgrade;
+      const result = runCommand(
+        { kind: COMMAND_KIND.UPGRADE_ROAD, edgeId: edge.id, cls },
+        { reselect: true },
+      );
+      if (!result) return;
+      sfx.place();
+      const live = net.edges.get(edge.id);
+      if (live) openRoadInspect(live);
+    });
+  });
+}
+
 function select(x, y) {
   // building first
   for (const b of eco.buildings.values()) {
@@ -660,8 +727,35 @@ function select(x, y) {
     `);
     return;
   }
+  // An edge: the road inspector, which is also where upgrades live.
+  let best = null;
+  let bd = 10 / renderer.cam.zoom;
+  for (const e of net.edges.values()) {
+    if (!Array.isArray(e.pts) || e.pts.length < 2) continue;
+    let nearest = Infinity;
+    for (let i = 1; i < e.pts.length; i++) {
+      nearest = Math.min(nearest, distToSegment(x, y, e.pts[i - 1], e.pts[i]));
+    }
+    if (nearest < bd) { bd = nearest; best = e; }
+  }
+  if (best) {
+    selected = { kind: 'edge', id: best.id };
+    openRoadInspect(best);
+    return;
+  }
+
   selected = null;
   closeInspect();
+}
+
+/** Distance from a point to a segment, for edge hit testing. */
+function distToSegment(px, py, a, b) {
+  const abx = b[0] - a[0];
+  const aby = b[1] - a[1];
+  const len2 = abx * abx + aby * aby;
+  let tt = len2 > 0 ? ((px - a[0]) * abx + (py - a[1]) * aby) / len2 : 0;
+  tt = clamp(tt, 0, 1);
+  return Math.hypot(px - (a[0] + abx * tt), py - (a[1] + aby * tt));
 }
 
 // ---------- keyboard ----------
@@ -1051,6 +1145,10 @@ function boot() {
     redo,
     runCommand,
     grid: { evaluateGridDraft },
+    demolitionPreview: (x, y) => demolitionPreview(getWorld(), x, y),
+    ROUNDABOUT_RADIUS,
+    validateRoadUpgrade: (id, cls) => validateRoadUpgrade(getWorld(), id, cls),
+    validateRoundaboutRadius: (id, r) => validateRoundaboutRadius(getWorld(), id, r),
     get history() { return { depth: history.depth, bytes: history.bytes, canRedo: history.canRedo, truncated: history.truncated }; },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,

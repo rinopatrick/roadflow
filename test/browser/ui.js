@@ -2318,6 +2318,124 @@ test('ui: three clicks build a rotated grid as one undoable edit', async () => {
   }
 });
 
+// ---------- S03.4: safe upgrades, relocation, demolition preview ----------
+
+test('ui: a road upgrades in place from the inspector', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y) && state.terrain.isRoadable(x + 240, y)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find buildable ground');
+
+    // Build a street.
+    const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    const [ex, ey] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 240, y), spot);
+    await page.keyboard.press('1');
+    await page.mouse.click(sx, sy);
+    await page.mouse.click(ex, ey);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    const edgeId = await page.evaluate(() => [...window.__rf.state.net.edges.keys()][0]);
+
+    // Select the road: the inspector offers upgrades.
+    await page.keyboard.press('0');
+    const [mx, my] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), [spot[0] + 120, spot[1]]);
+    await page.mouse.click(mx, my);
+    await page.waitForFunction(() => document.getElementById('inspect').classList.contains('open'), null, { timeout: 10000 });
+
+    const panel = await page.evaluate(() => ({
+      title: document.getElementById('insTitle').textContent.trim(),
+      upgrades: [...document.querySelectorAll('[data-upgrade]')].map(b => ({
+        cls: b.dataset.upgrade,
+        disabled: b.disabled,
+      })),
+    }));
+    assert.match(panel.title, /street/i, `the inspector must name the road class, got: ${panel.title}`);
+    assert.equal(panel.upgrades.length, 3, 'three upgrade options must be offered');
+    assert.ok(panel.upgrades.find(u => u.cls === 'street')?.disabled,
+      'the current class must be disabled');
+    assert.ok(!panel.upgrades.find(u => u.cls === 'avenue')?.disabled,
+      'a clear avenue upgrade must be available');
+
+    // Upgrade to avenue.
+    await page.click('[data-upgrade="avenue"]');
+    await page.waitForFunction(
+      (id) => window.__rf.state.net.edges.get(id)?.cls === 'avenue', edgeId, { timeout: 10000 });
+
+    const after = await page.evaluate((id) => ({
+      cls: window.__rf.state.net.edges.get(id).cls,
+      stillExists: window.__rf.state.net.edges.has(id),
+      depth: window.__rf.history.depth,
+    }), edgeId);
+    assert.equal(after.cls, 'avenue', 'the class must change');
+    assert.ok(after.stillExists, 'the edge ID must be preserved');
+    assert.ok(after.depth >= 2, 'the upgrade must be an undoable edit');
+
+    // One undo returns it to a street.
+    await page.click('#undobtn');
+    await page.waitForFunction(
+      (id) => window.__rf.state.net.edges.get(id)?.cls === 'street', edgeId, { timeout: 10000 });
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: the bulldoze badge says what it would remove', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // A crossroads with a roundabout: clicking any part must report the WHOLE ring.
+    const info = await page.evaluate(() => {
+      const { state } = window.__rf;
+      const run = window.__rf.runCommand;
+      const world = window.__rf.world;
+      // Build a crossroads.
+      run({ kind: 'addRoad', controls: [[-600, 0], [600, 0]], cls: 'street' });
+      run({ kind: 'addRoad', controls: [[0, -600], [0, 600]], cls: 'street' });
+      const junction = [...window.__rf.state.net.nodes.values()].find(n => n.edges.size === 4);
+      if (!junction) return { ok: false, why: 'no junction' };
+      const r = run({ kind: 'makeRoundabout', nodeId: junction.id, radius: 40 });
+      if (!r) return { ok: false, why: 'roundabout refused' };
+      const ring = [...window.__rf.state.net.edges.values()].filter(e => e.ring);
+      const mid = ring[0].pts[Math.floor(ring[0].pts.length / 2)];
+      const preview = window.__rf.demolitionPreview(mid[0], mid[1]);
+      return {
+        ok: true,
+        ringCount: ring.length,
+        previewKind: preview.kind,
+        previewEdges: preview.edgeIds.length,
+        description: preview.description,
+      };
+    });
+    assert.equal(info.ok, true, `fixture failed: ${info.why}`);
+    assert.equal(info.previewKind, 'roundabout',
+      `clicking a ring must preview the roundabout, got ${info.previewKind}`);
+    assert.equal(info.previewEdges, info.ringCount,
+      `the preview must list all ${info.ringCount} ring edges, listed ${info.previewEdges}`);
+    assert.match(info.description, /whole roundabout/i,
+      `the description must say it is the whole ring, got: ${info.description}`);
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

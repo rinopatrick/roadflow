@@ -696,3 +696,153 @@ test('a grid whose segment the graph refuses builds NOTHING', () => {
   assert.deepEqual(norm(r.world), before, 'and NOTHING may be built');
   assert.equal(h.depth, 0, 'and nothing may be undoable');
 });
+
+// ------------------------------------------- S03.4 construction edits ---
+
+/** A road with a house beside it, on real terrain. */
+function roadAndHouse() {
+  const w = roadWorld();
+  const road = applyWorldCommand(w, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[0, 0], [600, 0]], cls: 'street',
+  });
+  assert.equal(road.ok, true, `fixture road failed: ${road.reason}`);
+  const placed = applyWorldCommand(road.world, {
+    kind: COMMAND_KIND.PLACE_BUILDING, type: 'house', x: 300, y: 40,
+  });
+  assert.equal(placed.ok, true, `fixture house failed: ${placed.reason}`);
+  return placed.world;
+}
+
+test('upgradeRoad widens in place and keeps the edge ID and its cars', () => {
+  const world = roadAndHouse();
+  const edge = [...world.net.edges.values()].find(e => e.cls === 'street');
+  assert.ok(edge, 'fixture must have a street');
+  const id = edge.id;
+  const nodesBefore = world.net.nodes.size;
+
+  const r = applyWorldCommand(world, { kind: COMMAND_KIND.UPGRADE_ROAD, edgeId: id, cls: 'avenue' });
+  assert.equal(r.ok, true, `expected success, got ${r.reason}`);
+  assert.ok(r.world.net.edges.has(id), 'the edge ID must be preserved');
+  assert.equal(r.world.net.edges.get(id).cls, 'avenue', 'the class must change');
+  assert.equal(r.world.net.nodes.size, nodesBefore, 'topology must be unchanged');
+  assert.equal(r.change.topologyChanged, false, 'an upgrade is not a topology change');
+});
+
+test('upgradeRoad refuses to widen into a house and changes nothing', () => {
+  const w = roadWorld();
+  let world = applyWorldCommand(w, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[0, 0], [600, 0]], cls: 'street',
+  }).world;
+  // y=25 is clear of a street's pavement (half ~8 plus half a house) but inside a
+  // highway's (half ~20 plus half a house).
+  world = applyWorldCommand(world, {
+    kind: COMMAND_KIND.PLACE_BUILDING, type: 'house', x: 300, y: 25,
+  }).world;
+  const edge = [...world.net.edges.values()].find(e => e.cls === 'street');
+  assert.ok(edge, 'fixture must have a street');
+  const before = norm(world);
+
+  const r = applyWorldCommand(world, { kind: COMMAND_KIND.UPGRADE_ROAD, edgeId: edge.id, cls: 'highway' });
+  assert.equal(r.ok, false, 'widening into a house must be refused');
+  assert.match(r.reason, /house|cut through/i, `got: ${r.reason}`);
+  assert.deepEqual(norm(r.world), before, 'and change nothing');
+  assert.equal(r.world.net.edges.get(edge.id).cls, 'street', 'the class must be untouched');
+});
+
+test('a roundabout accepts an explicit radius', () => {
+  const w = roadWorld();
+  let world = applyWorldCommand(w, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[-600, 0], [600, 0]], cls: 'street',
+  }).world;
+  world = applyWorldCommand(world, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[0, -600], [0, 600]], cls: 'street',
+  }).world;
+  const junction = [...world.net.nodes.values()].find(n => n.edges.size === 4);
+  assert.ok(junction, 'fixture must make a crossroads');
+
+  const r = applyWorldCommand(world, {
+    kind: COMMAND_KIND.MAKE_ROUNDABOUT, nodeId: junction.id, radius: 60,
+  });
+  assert.equal(r.ok, true, `expected success, got ${r.reason}`);
+  const ring = [...r.world.net.edges.values()].filter(e => e.ring);
+  assert.ok(ring.length > 0, 'the ring must exist');
+
+  // The ring nodes must sit at the requested radius from the old centre.
+  const cx = junction.x;
+  const cy = junction.y;
+  const ringNodeIds = new Set();
+  for (const e of ring) { ringNodeIds.add(e.a); ringNodeIds.add(e.b); }
+  for (const id of ringNodeIds) {
+    const n = r.world.net.nodes.get(id);
+    if (!n) continue;
+    const d = Math.hypot(n.x - cx, n.y - cy);
+    assert.ok(Math.abs(d - 60) < 2, `ring node ${id} sits ${d.toFixed(1)} wu out, expected ~60`);
+  }
+});
+
+test('a roundabout radius that would swallow an arm is refused', () => {
+  const w = roadWorld();
+  let world = applyWorldCommand(w, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[-600, 0], [600, 0]], cls: 'street',
+  }).world;
+  world = applyWorldCommand(world, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[0, 0], [0, 40]], cls: 'street',
+  }).world;
+  const junction = [...world.net.nodes.values()].find(n => n.edges.size === 3);
+  assert.ok(junction, 'fixture must make a T junction');
+  const before = norm(world);
+
+  const r = applyWorldCommand(world, {
+    kind: COMMAND_KIND.MAKE_ROUNDABOUT, nodeId: junction.id, radius: 100,
+  });
+  assert.equal(r.ok, false, 'a 100 wu radius on a 40 wu arm must be refused');
+  assert.deepEqual(norm(r.world), before, 'and change nothing');
+});
+
+test('moveBuilding preserves ID, type and stock', () => {
+  const world = roadAndHouse();
+  const b = [...world.eco.buildings.values()][0];
+  const stockBefore = { ...world.eco.batch };
+  const id = b.id;
+  const type = b.type;
+
+  const r = applyWorldCommand(world, { kind: COMMAND_KIND.MOVE_BUILDING, id, x: 450, y: 40 });
+  assert.equal(r.ok, true, `expected success, got ${r.reason}`);
+
+  const moved = r.world.eco.buildings.get(id);
+  assert.ok(moved, 'the building must keep its ID');
+  assert.equal(moved.type, type, 'and its type');
+  assert.ok(Math.abs(moved.x - 450) < 1e-9 && Math.abs(moved.y - 40) < 1e-9,
+    'and be at the new position');
+  assert.equal(r.world.eco.buildings.size, 1, 'no building may be duplicated');
+  assert.deepEqual({ ...r.world.eco.batch }, stockBefore,
+    'a move must not spend or refund stock');
+});
+
+test('moveBuilding refuses a destination that overlaps another building', () => {
+  const w = roadWorld();
+  let world = applyWorldCommand(w, {
+    kind: COMMAND_KIND.ADD_ROAD, controls: [[0, 0], [600, 0]], cls: 'street',
+  }).world;
+  world = applyWorldCommand(world, {
+    kind: COMMAND_KIND.PLACE_BUILDING, type: 'house', x: 150, y: 40,
+  }).world;
+  world = applyWorldCommand(world, {
+    kind: COMMAND_KIND.PLACE_BUILDING, type: 'shop', x: 450, y: 40,
+  }).world;
+  const [a, bShop] = [...world.eco.buildings.values()];
+  const before = norm(world);
+
+  const r = applyWorldCommand(world, {
+    kind: COMMAND_KIND.MOVE_BUILDING, id: a.id, x: bShop.x, y: bShop.y,
+  });
+  assert.equal(r.ok, false, 'moving onto another building must be refused');
+  assert.deepEqual(norm(r.world), before, 'and change nothing');
+});
+
+test('a demolition preview is reported by the command layer as a query', () => {
+  // The preview is a pure query, so it lives in constructionEdits; this asserts
+  // the command layer did not need a destructive "preview" kind.
+  assert.ok(!COMMAND_KINDS.includes('demolitionPreview'),
+    'a preview must not be a command: commands are edits');
+});

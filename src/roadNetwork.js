@@ -565,7 +565,16 @@ export class RoadNetwork {
   // Convert a junction node into a real one-way ring. Arm roads are split at
   // the ring radius; the split nodes become ring nodes. Returns
   // { ringNodeIds, ringEdgeIds } or null.
-  makeRoundabout(nodeId) {
+  /**
+   * Converts a junction into a roundabout.
+   *
+   * @param {string} nodeId the junction
+   * @param {number} [radius] ring radius in wu; when omitted the radius is
+   *   derived from the widest arm so the ring clears every approach. S03.4 adds
+   *   the explicit radius so the player can size the ring, bounded 24..100 wu by
+   *   validateRoundaboutRadius in src/constructionEdits.js.
+   */
+  makeRoundabout(nodeId, radius) {
     const center = this.nodes.get(nodeId);
     if (!center || center.type === 'driveway') return null;
     const armIds = [...center.edges].filter(eid => {
@@ -575,7 +584,8 @@ export class RoadNetwork {
     if (armIds.length < 2) return null;
 
     const maxW = Math.max(...armIds.map(id => roadDimensions(this.edges.get(id)).width));
-    const R = 24 + maxW / 2;
+    // An explicit radius wins; otherwise clear the widest arm by half its width.
+    const R = Number.isFinite(radius) ? radius : 24 + maxW / 2;
 
     // 1. split every arm at radius R (measured from the center side) and drop
     // the stub between split node and center.
