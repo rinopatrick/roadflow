@@ -194,6 +194,13 @@ export function keyboardAction(ev, scope = {}) {
   //    cannot see past is worse than no shortcut.
   if (dialog || panel) return { action: 'none', preventDefault: false };
 
+  // Undo and redo. Handled after the scope guards, so a shortcut never edits
+  // the city beneath an open panel, and after the form-control guard, so a
+  // text field keeps its own Ctrl+Z.
+  if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'z' || ev.key === 'Z')) {
+    return { action: ev.shiftKey ? 'redo' : 'undo', preventDefault: true };
+  }
+
   // 4. Space on a focused button or link activates it (the browser's default);
   //    preventDefault here would make the control keyboard-unreachable.
   if (ev.key === ' ') {

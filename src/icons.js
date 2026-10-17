@@ -38,6 +38,8 @@ export const ICONS = {
   load: '<path d="M12 13.5v-10"/><path d="M8 7.5l4-4 4 4"/><path d="M4.5 16v4h15v-4"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  undo: '<path d="M9 7L4.5 11.5L9 16"/><path d="M4.5 11.5H14a5.5 5.5 0 0 1 0 11h-3"/>',
+  redo: '<path d="M15 7l4.5 4.5L15 16"/><path d="M19.5 11.5H10a5.5 5.5 0 0 0 0 11h3"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
     + '<rect x="9" y="9" width="6" height="6" rx="1"/>',
   layers: '<path d="M12 3.5l8.5 4.5-8.5 4.5-8.5-4.5z"/><path d="M3.5 12.5L12 17l8.5-4.5"/>',
@@ -59,7 +61,7 @@ export const REQUIRED_ICON_IDS = [
   'house', 'shop', 'factory', 'bulldoze', 'save', 'load',
   'close', 'help', 'menu',
   // DESIGN section 2 requires an icon for layers and for sound.
-  'layers', 'sound', 'mute', 'fit',
+  'layers', 'sound', 'mute', 'fit', 'undo', 'redo',
 ];
 
 /**

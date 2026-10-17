@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **434 passes** and `npm run test:browser` **59**, as of S02.6b. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **465 passes** and `npm run test:browser` **62**, as of S03.1. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -130,6 +130,21 @@ The fix is `capForNode(degree)`: round for a degree-2 BEND (where the pavement g
 
 Same trap for shadows: an offset applied inside `ctx.rotate(rot)` rotates with the object. Use `offsetInRotatedFrame` to keep one fixed screen direction.
 
+### Pitfall: hydrateWorld does not copy its input
+
+`hydrateWorld` keeps the caller's objects: `Economy.fromJSON` stores the very building objects from `data.buildings`, and the live `eco.batch` aliases `data.batch`. Handing a stored snapshot straight to it makes the live world **share memory with the recorded history**, so a command that spends inventory silently rewrites the snapshot it is meant to restore.
+
+The S03.1 test caught this as `9 !== 10` on an inventory count, not as "undo worked". Two lessons:
+
+1. Deep-copy snapshot data before hydrating it whenever the source is retained (a history entry, a save slot).
+2. Assert **exact values** after an undo, not that something changed. "Undo worked" would have passed.
+
+### Pitfall: a replaced world can keep the same version number
+
+Caches keyed on `net.version` are wrong across a `replaceWorld`: a freshly hydrated network starts at version 1, exactly like the empty one it replaced. The access overlay served reachability computed from a network that no longer existed.
+
+Invalidate version-keyed caches by **dropping** them in the one place that adopts a new world (`renderer.resetCaches()`), rather than by comparing version numbers.
+
 ### Pitfall: a missing pointer-cancel handler is invisible until someone alt-tabs
 
 The pointer handlers had **no** `pointercancel`, `lostpointercapture` or window-blur listener, so a pan interrupted by an alt-tab left the pan state set and the map dragged with no button held. No test noticed, because a browser test that never alt-tabs never cancels a pointer.
@@ -231,6 +246,9 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node scripts/mutate-s025b.mjs` | S02.5b | Mutation harness for the S02.5b guards (7 mutations, 7 caught) |
 | `node --test test/tutorial.test.js` | S02.6a | **Created.** Tutorial state machine: five steps in DESIGN order, earliest-unmet-condition derivation, partial progress, monotonicity, world snapshot purity. Pure, no canvas |
 | `src/construction.js` + `test/construction-cursor.test.js` | S02.6b | **Created.** Keyboard construction cursor (arrow 10 wu, shift 1 wu, show/hide) and a simple FocusTrap. Pure, no canvas |
+| `node --test test/worldCommands.test.js` | S03.1 | **Created.** Atomic commands: every kind JSON-safe, unknown kinds refused, each action's success and refusal paths, byte-equivalent worlds after every failure, invariant checking, bounded history by entries and bytes, undo/redo fidelity, 20 undo/redo cycles without duplicate IDs, inventory exactness, and active-trip snapshots without double XP. Pure, no canvas |
+| `node scripts/mutate-s031.mjs` | S03.1 | Mutation harness for the S03.1 guards (14 mutations, 14 caught) |
+| `node scripts/probe-undo.mjs` | S03.1 | **Created.** Captures the undo/redo buttons in their disabled and enabled states |
 | `node scripts/probe-buildings.mjs` | S02.4c | **Created.** Captures the building silhouettes close up and reports the variant each building wears |
 | `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |
