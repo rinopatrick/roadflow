@@ -18,6 +18,7 @@ import { tutorialStep, tutorialWorldSnapshot } from './tutorial.js';
 import { ConstructionCursor, arrowDirection } from './construction.js';
 import { createHistory, COMMAND_KIND } from './worldCommands.js';
 import { evaluateRoadDraft, DRAFT_MODE } from './roadDraft.js';
+import { evaluateGridDraft } from './gridDraft.js';
 import { buildingVariant } from './render/buildings.js';
 import {
   pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
@@ -1048,6 +1049,8 @@ function boot() {
     // Undo/redo, so browser tests drive the real controls' target functions.
     undo,
     redo,
+    runCommand,
+    grid: { evaluateGridDraft },
     get history() { return { depth: history.depth, bytes: history.bytes, canRedo: history.canRedo, truncated: history.truncated }; },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,

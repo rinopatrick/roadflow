@@ -12,6 +12,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createIdSource, makeRng } from '../src/core.js';
+import { evaluateGridDraft } from '../src/gridDraft.js';
+
+/**
+ * A 400x400 square of REAL terrain (seed 1) that is fully roadable.
+ * Found by scanning rather than guessed: this file deliberately uses real terrain
+ * so a command's terrain validation is exercised, and a grid at the origin would
+ * cross water.
+ */
+const GRID_A = [-920, -1200];
 import { RoadNetwork } from '../src/roadNetwork.js';
 import { TrafficSim } from '../src/traffic.js';
 import { Economy } from '../src/economy.js';
@@ -605,4 +614,85 @@ test('historyLimits documents the configured bounds', () => {
   const lim = historyLimits();
   assert.equal(lim.entries, 50, 'DESIGN/CONTRACTS ask for up to 50 snapshots');
   assert.equal(lim.bytes, 32 * 1024 * 1024, 'and a 32 MiB ceiling');
+});
+
+// ------------------------------------------------- grid as one command ---
+
+test('a grid is ONE command and ONE undo entry', () => {
+  const h = createHistory();
+  const w = roadWorld();
+  const g = evaluateGridDraft(w, { a: GRID_A, b: [GRID_A[0] + 400, GRID_A[1]], c: [GRID_A[0], GRID_A[1] + 400] });
+  assert.equal(g.ok, true, g.reason);
+
+  const before = norm(w);
+  const r = h.execute(w, { kind: COMMAND_KIND.ADD_GRID, segments: g.segments, cls: 'street' });
+  assert.equal(r.ok, true, `expected success, got ${r.reason}`);
+  assert.equal(h.depth, 1, 'a whole grid must be ONE history entry, not one per segment');
+
+  const n = g.frame.uStops.length;
+  const m = g.frame.vStops.length;
+  assert.equal(r.world.net.nodes.size, n * m, 'the lattice must have its analytical node count');
+  assert.equal(r.world.net.edges.size, n * (m - 1) + m * (n - 1), 'and its analytical edge count');
+
+  const undone = h.undo(r.world);
+  assert.equal(undone.ok, true);
+  assert.deepEqual(norm(undone.world), before,
+    'one undo must remove the entire grid and restore the exact prior world');
+  assert.equal(undone.world.net.edges.size, 0, 'no street may survive the undo');
+});
+
+test('committing the same grid twice is idempotent, not an error', () => {
+  const h = createHistory();
+  const w = roadWorld();
+  const g = evaluateGridDraft(w, { a: GRID_A, b: [GRID_A[0] + 400, GRID_A[1]], c: [GRID_A[0], GRID_A[1] + 400] });
+  const cmd = { kind: COMMAND_KIND.ADD_GRID, segments: g.segments, cls: 'street' };
+
+  const first = h.execute(w, cmd);
+  assert.equal(first.ok, true, first.reason);
+  const afterFirst = { nodes: first.world.net.nodes.size, edges: first.world.net.edges.size };
+
+  const second = h.execute(first.world, cmd);
+  assert.equal(second.ok, true,
+    `re-committing the same grid must be accepted, got: ${second.reason}`);
+  assert.equal(second.world.net.nodes.size, afterFirst.nodes, 'no extra nodes');
+  assert.equal(second.world.net.edges.size, afterFirst.edges, 'no duplicate edges');
+});
+
+test('a grid with one bad segment builds NOTHING', () => {
+  const h = createHistory();
+  const w = roadWorld();
+  const segments = [
+    [[0, 0], [0, 400]],
+    [[200, 0], [200, 400]],
+    [[400, 0], [400, 400]],
+    [[0, 0], [400, 0]],
+    [[0, 200], [400, 200]],
+    [[0, 400], [400, 400]],
+    [[0, 0]],
+  ];
+  const before = norm(w);
+  const r = h.execute(w, { kind: COMMAND_KIND.ADD_GRID, segments, cls: 'street' });
+  assert.equal(r.ok, false, 'a grid with a bad segment must be refused');
+  assert.match(r.reason, /segment 7/, `the reason must name the segment, got: ${r.reason}`);
+  assert.deepEqual(norm(r.world), before, 'and NOTHING may be built');
+  assert.equal(h.depth, 0, 'and nothing may be undoable');
+});
+
+test('a grid whose segment the graph refuses builds NOTHING', () => {
+  // Distinct from the geometry check: these segments are geometrically fine but
+  // one is too short for addRoad to build, which exercises the command's own
+  // per-segment failure path rather than the evaluator's.
+  const h = createHistory();
+  const w = roadWorld();
+  const segments = [
+    [[0, 0], [0, 400]],
+    [[200, 0], [200, 400]],
+    [[200, 0], [205, 0]],   // 5 wu: below the snapping distance
+  ];
+  const before = norm(w);
+  const r = h.execute(w, { kind: COMMAND_KIND.ADD_GRID, segments, cls: 'street' });
+  assert.equal(r.ok, false, 'a segment the graph refuses must reject the whole grid');
+  assert.match(r.reason, /segment 3/, `the reason must name the segment, got: ${r.reason}`);
+  assert.deepEqual(norm(r.world), before, 'and NOTHING may be built');
+  assert.equal(h.depth, 0, 'and nothing may be undoable');
 });

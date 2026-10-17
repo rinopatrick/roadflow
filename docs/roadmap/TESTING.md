@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **497 passes** and `npm run test:browser` **65**, as of S03.2. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **530 passes** and `npm run test:browser` **66**, as of S03.3. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -129,6 +129,14 @@ DESIGN forbids painting "a circular disk over every junction at every scale". It
 The fix is `capForNode(degree)`: round for a degree-2 BEND (where the pavement genuinely curves), square for 3+ (where the junction's own footprint supplies the fill).
 
 Same trap for shadows: an offset applied inside `ctx.rotate(rot)` rotates with the object. Use `offsetInRotatedFrame` to keep one fixed screen direction.
+
+### Pitfall: a strict parameter test discards a crossing at an endpoint
+
+`_crossPoint` tested intersection parameters with `t >= 0 && t <= 1 && u >= 0 && u <= 1`. A crossing that lands exactly on an edge's **endpoint** computes to 1 plus floating-point noise — measured `1.0000000000000007`, an excess of **6.7e-16** — so a real intersection was discarded, the crossing edge was never split, and a rotated road grid silently lost one street (23 edges where the analytical count was 24).
+
+Use a tolerance on the **normalised** parameters (`1e-9`), and clamp the parameter into `[0,1]` afterwards so the resulting arc position reads as an endpoint rather than an interior split. A 1e-9 tolerance on a normalised parameter is at most 1e-9 of a segment's length, far below any buildable distance, so it cannot invent a crossing.
+
+The general lesson: any intersection, containment or overlap test that uses strict bounds will lose the boundary case. The boundary case is exactly where grid lines, junctions and snapping all live.
 
 ### Pitfall: endpoint validation is not footprint validation
 
@@ -264,6 +272,8 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node --test test/roadDraft.test.js` | S03.2 | **Created.** Road draft: snap radii and priorities, footprint sampling (the water-between-legal-endpoints case), preview/commit geometry equality, control arc monotonicity, purity, and every refusal reason. Pure, no canvas |
 | `node scripts/mutate-s032.mjs` | S03.2 | Mutation harness for the S03.2 guards (14 mutations, 14 caught) |
 | `node scripts/probe-draft.mjs` | S03.2 | **Created.** Captures a valid and an invalid draft preview |
+| `node --test test/gridDraft.test.js` | S03.3 | **Created.** Rotated road grid: axis stops with no sliver, orthonormal local frame at every rotation, all rejections by name, exact lattice geometry at 0/30/90 degrees, analytical node and edge counts across a 14-rotation sweep, grid-as-one-command idempotence, and the endpoint-crossing regression. Pure, no canvas |
+| `node scripts/mutate-s033.mjs` | S03.3 | Mutation harness for the S03.3 guards (15 mutations, 14 caught; 1 documented as unobservable) |
 | `node scripts/probe-buildings.mjs` | S02.4c | **Created.** Captures the building silhouettes close up and reports the variant each building wears |
 | `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |

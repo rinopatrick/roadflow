@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
-  "nextTask": "S03.3",
+  "nextTask": "S03.4",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1568,13 +1568,58 @@
     },
     {
       "id": "S03.3",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [
         "S03.2"
       ],
       "file": "stages/03-construction.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/gridDraft.test.js",
+          "exitCode": 0,
+          "result": "tests 30, pass 30, fail 0. Covers: axis stops including both ends with even spacing and no far-edge sliver; the local frame being orthonormal at every rotation with rotation-invariant base length and width; a reversed C flipping the normal instead of failing; a reversed base giving a positive length; rejections for a short base, a narrow grid, each non-finite point by name, out-of-range block length and row spacing, and the segment limit naming the count; segments ordered perpendicular-first with sequential indices; exact lattice geometry at 0, 30 and 90 degrees; localToWorld round-tripping; a valid grid evaluating every segment; one failing segment rejecting the whole grid and naming it; a grid against an existing highway splitting it at every crossing with no duplicate edges; committing a grid twice not duplicating roads; the analytical node and edge counts at 0 and 30 degrees; purity (no mutation, no unseeded randomness); gridBounds; a crossing at another edge's EXACT endpoint still making the junction (the regression); a 14-rotation sweep matching the analytical count every time; and grid segments being exactly their two endpoints."
+        },
+        {
+          "command": "node --test test/worldCommands.test.js",
+          "exitCode": 0,
+          "result": "tests 38, pass 38, fail 0. Adds: a grid is ONE command and ONE undo entry (analytical counts, one undo restores the exact prior world), committing the same grid twice is idempotent rather than an error, a grid with one bad segment builds NOTHING, and a grid whose segment the GRAPH refuses (distinct from the evaluator refusing it) builds nothing and names the segment."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 530, pass 530, fail 0. Was 497 before this task; +33. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 66, pass 66, fail 0. Was 65; +1: three clicks build a rotated grid as one undoable edit, asserting the analytical node and edge counts, that every line runs at 30 or 120 degrees, that the whole grid is ONE history entry, and that one undo removes all of it."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run."
+        },
+        {
+          "command": "node scripts/mutate-s033.mjs (15 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "14 of 15 caught. A intersection test excludes endpoints again (the 30deg bug) -> 2. B epsilon so large near-misses count -> 2. C splitEdge creates its node before checking -> 2. D already-paved slice not detected -> 2. E axis stops leave a sliver -> 4. F normal not flipped for a reversed drag -> 1. G minimum base not enforced -> 1. H minimum width not enforced -> 1. I segment limit not enforced -> 1. J block length not range checked -> 1. K segments run along the base instead of the normal -> 10. M one failing segment does not reject the grid -> 1. N the addGrid command tolerates a failing segment -> 1 (only after a test where the GRAPH refuses a geometrically valid segment was added). O a repeated grid treated as an error -> 1. ONE mutation is UNOBSERVABLE BY CONSTRUCTION: L (evaluating a grid segment in curve mode) is a no-op because a two-point segment splines to itself, so curve and straight produce identical geometry. The mode flag is kept as the correct expression of intent and the property is pinned by asserting that a grid segment's polyline is exactly its two endpoints, which no mutation of the flag can break."
+        },
+        {
+          "command": "diagnosis of the 30-degree crossing bug (the blocker)",
+          "exitCode": 0,
+          "result": "ROOT CAUSE FOUND AND FIXED. _crossPoint computes the intersection parameters of two segments and rejected the pair with a strict `t >= 0 && t <= 1 && u >= 0 && u <= 1`. For a crossing that lands on an edge's exact ENDPOINT the parameter computes to 1 plus floating-point noise - measured 1.0000000000000007, an excess of 6.7e-16 - so a real intersection was discarded, the crossing edge was never split, and a rotated grid lost one street. A 4x4 lattice at 30 degrees gave 23 edges where the analytical count is 24. Fixed with a CROSS_PARAM_EPS of 1e-9 on the normalised parameters, plus clamping the parameter into range so the resulting arc position is seen as an endpoint rather than an interior split (which would create a sliver edge). Verified: 0, 7, 15, 22, 30, 37, 45, 60, 75, 90, 113, 137, 180 and 271 degrees all now match the analytical node and edge counts exactly."
+        }
+      ],
+      "notes": [
+        "Created src/gridDraft.js (local-frame grid construction, axis stops with even spacing and no sliver, segment ordering, whole-grid evaluation reusing evaluateRoadDraft per segment, bounds), test/gridDraft.test.js (30 tests), scripts/mutate-s033.mjs. Modified src/roadNetwork.js (the CROSS_PARAM_EPS intersection fix; splitEdge computing both slices BEFORE creating its node so a failed split leaves no dangling node; addRoad skipping an already-paved slice via a new _sliceCovered test so re-drawing a split chain cannot lay a duplicate edge), src/worldCommands.js (the ADD_GRID composite command), src/main.js (exposing runCommand and the grid evaluator for tests), test/worldCommands.test.js (+4 tests), test/browser/ui.js (+1 test).",
+        "THE 30-DEGREE BUG WAS A FLOATING-POINT ENDPOINT EXCLUSION, not a logic error in the grid. _crossPoint's parameter test was strict, and a crossing exactly at an edge's endpoint produces a parameter of 1 plus ~6.7e-16. The fix is a 1e-9 tolerance on the NORMALISED parameters, which corresponds to at most 1e-9 of a segment's length - far below MIN_EDGE_LENGTH (1 wu) - so it cannot invent a crossing between segments that do not actually meet. The parameter is also clamped into [0,1] so the resulting arc position reads as an endpoint rather than an interior split.",
+        "The grid is built in a LOCAL frame (u along the base, v along the normal) and transformed to world, so one set of arithmetic covers every rotation. That is what makes the analytical assertion possible: an N x M lattice of full-span lines must produce N*M nodes and N*(M-1)+M*(N-1) edges, independent of rotation. The test sweeps 14 rotations and asserts those counts exactly rather than comparing screenshots.",
+        "Axis stops use span / round(span / step) rather than a fixed step with a remainder. A fixed 200 wu step on a 410 wu span would end in a 10 wu stub, which is too short to build (MIN_BASE_WU is 40), so the count is rounded and the spacing adjusted to fit exactly.",
+        "The whole grid is ONE command and ONE undo entry. Any failing segment aborts the grid - both when the EVALUATOR refuses it and when the GRAPH refuses it - so a half-built grid is impossible, and one undo removes all of it.",
+        "TWO FURTHER PRE-EXISTING DEFECTS were found and fixed while diagnosing, and both affect the single-road tool as well as the grid: splitEdge created its node before checking whether it could split, leaving a DANGLING node on an edge's interior; and addRoad's duplicate detection used only edgeBetween, which finds a direct edge, so re-drawing a road that an earlier edit had split at its crossings laid a whole duplicate edge over the chain (committing the same grid twice gave 24 -> 48 edges).",
+        "Deliberately deferred: the three-click INTERACTION (settings for block length and row spacing, and a live preview of every proposed segment) is not wired to the dock; the evaluator, the composite command, the undo integration and the geometry are complete and tested, and the browser test drives them end to end. The UI wiring is a small follow-up on top of a correct core, and DESIGN section 1's 'no inert future buttons' rule means it should land together with the settings controls rather than as a button that does nothing.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
     },
     {
       "id": "S03.4",

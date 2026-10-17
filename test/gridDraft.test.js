@@ -372,6 +372,53 @@ test('the analytical count holds at 30 degrees too', () => {
     `30deg: expected ${expected.edges} edges, got ${w.net.edges.size}`);
 });
 
+// --------------------------------------------------- endpoint crossings ---
+
+test('a crossing at another edge EXACT endpoint still makes the junction', () => {
+  // THE regression this task found. Two lines crossing where one of them ENDS:
+  // the intersection parameter for that edge computes to 1 plus floating-point
+  // noise (measured 1.0000000000000007), so a strict `<= 1` test rejected a real
+  // intersection and the crossing edge was never split. A rotated grid lost one
+  // street because of it.
+  const w = world();
+  // Horizontal line, and a vertical one that ends exactly on it.
+  w.net.addRoad([[0, 100], [600, 100]], 'street');
+  const second = w.net.addRoad([[300, 0], [300, 100]], 'street');
+  assert.ok(second.edgeIds.length > 0, 'fixture must build the second line');
+
+  // The horizontal line must have been split at x=300: 2 edges, and a node at
+  // (300,100) shared by all four arms.
+  const at300 = [...w.net.nodes.values()].find(n => Math.abs(n.x - 300) < 0.5 && Math.abs(n.y - 100) < 0.5);
+  assert.ok(at300, 'a junction node must exist at the crossing point');
+  assert.equal(at300.edges.size, 3, `the junction must join three arms, has ${at300.edges.size}`);
+
+  const horizontal = [...w.net.edges.values()].filter(e => Math.abs(e.pts[0][1] - 100) < 0.5);
+  assert.equal(horizontal.length, 2,
+    `the horizontal line must be split into 2 edges, got ${horizontal.length}`);
+});
+
+test('a grid rotation sweep always matches the analytical lattice count', () => {
+  // Sweeps enough rotations that a floating-point endpoint case is certain to
+  // appear, and asserts the exact node and edge counts every time.
+  for (const deg of [0, 7, 15, 22, 30, 37, 45, 60, 75, 90, 113, 137, 180, 271]) {
+    const w = world();
+    const g = evaluateGridDraft(w, {
+      a: [0, 0], b: rot([600, 0], deg), c: rot([0, 400], deg),
+    });
+    assert.equal(g.ok, true, `${deg}deg: ${g.reason}`);
+    for (const s of g.segments) w.net.addRoad(s.polyline, 'street', { pts: s.polyline });
+
+    const n = g.frame.uStops.length;
+    const m = g.frame.vStops.length;
+    const expected = lattice(n, m);
+    assert.equal(w.net.nodes.size, expected.nodes,
+      `${deg}deg: expected ${expected.nodes} nodes, got ${w.net.nodes.size}`);
+    assert.equal(w.net.edges.size, expected.edges,
+      `${deg}deg: expected ${expected.edges} edges, got ${w.net.edges.size}`);
+    assert.deepEqual(findDuplicateEdges(w.net), [], `${deg}deg: no duplicate edges`);
+  }
+});
+
 // ------------------------------------------------------------- purity ---
 
 test('evaluateGridDraft never mutates the world', () => {
@@ -419,3 +466,19 @@ function findDuplicateEdges(net) {
   }
   return dupes;
 }
+
+test('a grid segment is exactly its two endpoints, with no spline samples', () => {
+  // Grid lines are straight runs between grid lines. If they were evaluated in
+  // curve mode they would bulge off the line the player drew - and for a
+  // two-point segment a spline is identical, so this asserts the property
+  // directly rather than relying on the mode flag being read.
+  const w = world();
+  const g = evaluateGridDraft(w, { a: [0, 0], b: [600, 0], c: [0, 400] });
+  assert.equal(g.ok, true, g.reason);
+  for (const s of g.segments) {
+    assert.equal(s.polyline.length, 2,
+      `a grid segment must be exactly two points, got ${s.polyline.length}`);
+    assert.deepEqual(s.polyline[0], s.from, 'the first point is the segment start');
+    assert.deepEqual(s.polyline[1], s.to, 'the second point is the segment end');
+  }
+});

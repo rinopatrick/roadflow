@@ -32,6 +32,18 @@ for (const cls of Object.keys(ROAD_CLASS)) {
 const NODE_SNAP = 18;      // snap to existing node within this dist
 const EDGE_SNAP = 12;      // split existing edge within this dist
 
+/**
+ * Tolerance on the normalised segment parameters of an intersection test.
+ *
+ * A crossing that lands exactly on an edge's ENDPOINT computes to a parameter of
+ * 1 plus floating-point noise (measured: 1.0000000000000007, an excess of
+ * 6.7e-16), so a strict `<= 1` test rejects a real intersection. The parameters
+ * are normalised to [0,1], so this tolerance corresponds to at most 1e-9 of a
+ * segment's length - far below any buildable distance (MIN_EDGE_LENGTH is 1 wu)
+ * and therefore cannot invent a crossing between segments that do not meet.
+ */
+const CROSS_PARAM_EPS = 1e-9;
+
 /** Shortest edge a construction path will create, in wu. */
 const MIN_EDGE_LENGTH = 1;
 
@@ -365,9 +377,15 @@ export class RoadNetwork {
         if (Math.abs(den) < 1e-9) continue;
         const t = ((cx - ax) * r2y - (cy - ay) * r2x) / den;
         const u = ((cx - ax) * r1y - (cy - ay) * r1x) / den;
-        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+        if (t >= -CROSS_PARAM_EPS && t <= 1 + CROSS_PARAM_EPS
+          && u >= -CROSS_PARAM_EPS && u <= 1 + CROSS_PARAM_EPS) {
           const len1 = Math.hypot(r1x, r1y), len2 = Math.hypot(r2x, r2y);
-          return { s1: e1.cum[i - 1] + len1 * t, s2: e2.cum[j - 1] + len2 * u };
+          // Clamp into range so a parameter a hair outside [0,1] yields an arc
+          // position that splitEdge sees as an endpoint rather than an interior
+          // split (which would create a sliver edge).
+          const tc = Math.min(1, Math.max(0, t));
+          const uc = Math.min(1, Math.max(0, u));
+          return { s1: e1.cum[i - 1] + len1 * tc, s2: e2.cum[j - 1] + len2 * uc };
         }
       }
     }
