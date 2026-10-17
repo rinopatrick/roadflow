@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **465 passes** and `npm run test:browser` **62**, as of S03.1. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **497 passes** and `npm run test:browser` **65**, as of S03.2. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -129,6 +129,18 @@ DESIGN forbids painting "a circular disk over every junction at every scale". It
 The fix is `capForNode(degree)`: round for a degree-2 BEND (where the pavement genuinely curves), square for 3+ (where the junction's own footprint supplies the fill).
 
 Same trap for shadows: an offset applied inside `ctx.rotate(rot)` rotates with the object. Use `offsetInRotatedFrame` to keep one fixed screen direction.
+
+### Pitfall: endpoint validation is not footprint validation
+
+The road check tested only the control points, so a road whose two **endpoints** sat on land but which crossed a river **between** them was accepted. The same blind spot applies to buildings: a road can pass through one while both ends are clear.
+
+Sample the whole polyline (every 4 wu) and check the road's half-width, then report the offending **point** so the preview can mark where it failed.
+
+### Pitfall: three geometry paths will disagree
+
+The road preview splined the raw control points in the renderer, `addRoad` splined them again with its own call, and neither matched when the mode was straight with an intermediate control: the commit landed **13.85 wu** from the preview.
+
+Have ONE evaluator produce the record, draw that record, and pass that same geometry to the commit through an options argument. Assert the result with a Hausdorff distance, not with a screenshot.
 
 ### Pitfall: hydrateWorld does not copy its input
 
@@ -249,6 +261,9 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node --test test/worldCommands.test.js` | S03.1 | **Created.** Atomic commands: every kind JSON-safe, unknown kinds refused, each action's success and refusal paths, byte-equivalent worlds after every failure, invariant checking, bounded history by entries and bytes, undo/redo fidelity, 20 undo/redo cycles without duplicate IDs, inventory exactness, and active-trip snapshots without double XP. Pure, no canvas |
 | `node scripts/mutate-s031.mjs` | S03.1 | Mutation harness for the S03.1 guards (14 mutations, 14 caught) |
 | `node scripts/probe-undo.mjs` | S03.1 | **Created.** Captures the undo/redo buttons in their disabled and enabled states |
+| `node --test test/roadDraft.test.js` | S03.2 | **Created.** Road draft: snap radii and priorities, footprint sampling (the water-between-legal-endpoints case), preview/commit geometry equality, control arc monotonicity, purity, and every refusal reason. Pure, no canvas |
+| `node scripts/mutate-s032.mjs` | S03.2 | Mutation harness for the S03.2 guards (14 mutations, 14 caught) |
+| `node scripts/probe-draft.mjs` | S03.2 | **Created.** Captures a valid and an invalid draft preview |
 | `node scripts/probe-buildings.mjs` | S02.4c | **Created.** Captures the building silhouettes close up and reports the variant each building wears |
 | `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |

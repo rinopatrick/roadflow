@@ -635,6 +635,18 @@ export class Renderer {
     ctx.restore();
   }
 
+  /**
+   * A short, whole-word version of a failure reason for the preview badge.
+   * Truncating at a character count cut words in half ("...would cross water or").
+   */
+  _shortReason(reason) {
+    const text = reason ?? 'invalid here';
+    if (text.length <= 34) return text;
+    const cut = text.slice(0, 34);
+    const space = cut.lastIndexOf(' ');
+    return (space > 12 ? cut.slice(0, space) : cut) + '…';
+  }
+
   _drawToolPreviews(ctx, state, zoom) {
     const { tool, preview, mouseWorld, mouseScreen, net, terrain, eco } = state;
     if (!mouseWorld) return;
@@ -650,40 +662,38 @@ export class Renderer {
       const cls = roadDimensions({ cls: tool === 'avenue' ? 'avenue' : tool === 'highway' ? 'highway' : 'street' });
       const roadW = cls.width * zoom;
 
-      // When actively drafting points
+      // When actively drafting points.
+      //
+      // The geometry comes from the evaluated record (src/roadDraft.js), so the
+      // preview IS what will be built. The renderer used to spline the raw
+      // control points itself, which was a THIRD geometry path that could
+      // disagree with both the draft evaluator and the commit.
       if (preview && preview.length >= 1) {
-        // spline the draft so preview matches the built road's shape
-        const draftPts = preview.length >= 2 ? splinePoints(preview, 12).pts : preview;
-        // Polyline connecting previous points
-        ctx.beginPath();
-        const [x0, y0] = this.worldToScreen(draftPts[0][0], draftPts[0][1]);
-        ctx.moveTo(x0, y0);
-        for (let i = 1; i < draftPts.length; i++) {
-          const [px, py] = this.worldToScreen(draftPts[i][0], draftPts[i][1]);
-          ctx.lineTo(px, py);
-        }
+        const record = state.draftRecord;
+        const poly = record && record.polyline && record.polyline.length >= 2
+          ? record.polyline
+          : (preview.length >= 2 ? splinePoints(preview, 12).pts : preview);
+        const ok = record ? record.ok : true;
+
+        // The drafted pavement.
         ctx.lineWidth = roadW;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = alpha(UI_TOKENS.accent, 0.45); // translucent accent ribbon
-        ctx.stroke();
+        ctx.strokeStyle = ok ? alpha(UI_TOKENS.accent, 0.45) : alpha(UI_TOKENS.danger, 0.32);
+        this._strokeWorldPolyline(ctx, poly, zoom);
 
-        // Rubberband line to mouse cursor — danger when crossing water/rock
-        const lastP = preview[preview.length - 1];
-        const [lx, ly] = this.worldToScreen(lastP[0], lastP[1]);
-        const curOk = terrain.isRoadable(mx, my);
-        ctx.beginPath();
-        ctx.moveTo(lx, ly);
-        ctx.lineTo(msx, msy);
-        ctx.lineWidth = roadW;
-        ctx.lineCap = 'round';
-        ctx.strokeStyle = curOk ? alpha(UI_TOKENS.accent, 0.55) : alpha(UI_TOKENS.danger, 0.5);
-        ctx.stroke();
+        // The centreline, so the draft reads as a road rather than a ribbon.
+        ctx.lineWidth = Math.max(1.2 * zoom, 1);
+        ctx.strokeStyle = ok ? alpha(UI_TOKENS.accent, 0.85) : alpha(UI_TOKENS.danger, 0.7);
+        ctx.setLineDash([6 * zoom, 6 * zoom]);
+        this._strokeWorldPolyline(ctx, poly, zoom);
+        ctx.setLineDash([]);
 
-        // Accent control point nodes — danger when placed on invalid terrain
-        for (const p of preview) {
+        // Control points, from the record so they sit where the road will.
+        const controls = record && record.controls && record.controls.length
+          ? record.controls : preview;
+        for (const p of controls) {
           const [px, py] = this.worldToScreen(p[0], p[1]);
-          const ok = terrain.isRoadable(p[0], p[1]);
           ctx.beginPath();
           ctx.arc(px, py, 4 * zoom, 0, Math.PI * 2);
           ctx.fillStyle = ok ? UI_TOKENS.accent : UI_TOKENS.danger;
@@ -693,18 +703,28 @@ export class Renderer {
           ctx.stroke();
         }
 
-        // Calculate approximate cost and length
-        let len = 0;
-        for (let i = 1; i < preview.length; i++) {
-          len += dist(preview[i-1][0], preview[i-1][1], preview[i][0], preview[i][1]);
+        // Mark where the draft fails, so an invalid road says WHERE.
+        if (record && record.failAt) {
+          const [fx, fy] = this.worldToScreen(record.failAt[0], record.failAt[1]);
+          ctx.beginPath();
+          ctx.arc(fx, fy, 8 * zoom, 0, Math.PI * 2);
+          ctx.strokeStyle = UI_TOKENS.danger;
+          ctx.lineWidth = 2 * zoom;
+          ctx.stroke();
         }
-        len += dist(lastP[0], lastP[1], mx, my);
-        const cost = Math.max(50, Math.round(len * 2));
 
-        const isRoadable = terrain.isRoadable(mx, my);
-        const parts = isRoadable
-          ? [{ text: `$${cost}`, bold: true }, { text: tool.charAt(0).toUpperCase() + tool.slice(1), color: UI_TOKENS.muted }]
-          : [{ text: `Cannot build`, error: true, bold: true }, { text: `Water / Rock`, color: UI_TOKENS.danger }];
+        // Length, not a fictional price: no currency exists yet, and DESIGN
+        // section 5 forbids showing a cost the simulation does not compute.
+        let len = 0;
+        for (let i = 1; i < poly.length; i++) {
+          len += dist(poly[i - 1][0], poly[i - 1][1], poly[i][0], poly[i][1]);
+        }
+        const shownLength = record ? Math.round(record.length) : Math.round(len);
+        const parts = ok
+          ? [{ text: `${shownLength} wu`, bold: true },
+            { text: tool.charAt(0).toUpperCase() + tool.slice(1), color: UI_TOKENS.muted }]
+          : [{ text: 'Cannot build', error: true, bold: true },
+            { text: this._shortReason(record?.reason), color: UI_TOKENS.danger }];
 
         this._drawPillBadge(ctx, msx + 18, msy - 12, parts);
       } else {

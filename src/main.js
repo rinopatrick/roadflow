@@ -17,6 +17,7 @@ import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
 import { tutorialStep, tutorialWorldSnapshot } from './tutorial.js';
 import { ConstructionCursor, arrowDirection } from './construction.js';
 import { createHistory, COMMAND_KIND } from './worldCommands.js';
+import { evaluateRoadDraft, DRAFT_MODE } from './roadDraft.js';
 import { buildingVariant } from './render/buildings.js';
 import {
   pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
@@ -35,7 +36,10 @@ const renderer = new Renderer(canvas);
 let terrain, net, traffic, eco;
 let ids = createIdSource();   // world-owned ID source (deterministic, collision-free)
 let speed = 1;
-let draft = [];            // road draft control points
+let draft = [];            // road draft control points (raw, unsnapped)
+let draftRecord = null;    // the evaluated record the preview and commit share
+let snapDisabled = false;  // Alt held: no snapping
+let angleSnap = false;     // Shift held: angle snap to 15 degrees
 let selected = null;
 let camerasMoved = false;  // the first tutorial condition
 let tutorialMode = false;  // true when the player chose Tutorial
@@ -273,6 +277,7 @@ canvas.addEventListener('pointermove', (e) => {
   const [wx, wy] = renderer.screenToWorld(e.offsetX, e.offsetY);
   mouseWorld = [wx, wy];
   mouseScreen = [e.offsetX, e.offsetY];
+  if (draft.length && !pointer.isPanning) refreshDraftRecord([wx, wy]);
   if (pointer.isPanning) {
     const cam = pointer.panTo(e.offsetX, e.offsetY, renderer.cam.zoom);
     if (cam) { renderer.cam.x = cam.x; renderer.cam.y = cam.y; }
@@ -420,6 +425,24 @@ function updateHistoryButtons() {
   if (r) r.disabled = !history.canRedo;
 }
 
+/**
+ * Re-evaluates the current draft into the one record the preview and the
+ * commit both use. Called whenever the draft or the pointer moves, so what is
+ * drawn is always what would be built.
+ */
+function refreshDraftRecord(mouseAt) {
+  if (!draft.length) { draftRecord = null; return; }
+  const points = mouseAt ? [...draft, mouseAt] : draft;
+  draftRecord = evaluateRoadDraft(getWorld(), {
+    points,
+    cls: roadClass(),
+    mode: DRAFT_MODE.CURVE,
+    snap: !snapDisabled,
+    angleSnap,
+    zoom: renderer.cam.zoom,
+  });
+}
+
 function handlePrimary(wx, wy) {
   switch (ui.activeTool) {
     case 'road': case 'avenue': case 'highway': {
@@ -428,6 +451,7 @@ function handlePrimary(wx, wy) {
       // built into the road.
       cursor.show(wx, wy);
       draft = pushDraftPoint(draft, wx, wy);
+      refreshDraftRecord();
       sfx.road();
       break;
     }
@@ -445,12 +469,25 @@ function roadClass() {
 }
 
 function finishRoad() {
-  if (draft.length < 2) { draft = []; return; }
-  // The terrain and class validation live in the command handler, so the
-  // preview, the commit and the undo all consult one set of rules.
-  const result = runCommand({ kind: COMMAND_KIND.ADD_ROAD, controls: draft, cls: roadClass() });
+  if (draft.length < 2) { draft = []; draftRecord = null; return; }
+  // Evaluate WITHOUT the hover point: the draft points are what was clicked.
+  refreshDraftRecord();
+  const record = draftRecord;
+  if (!record || !record.ok) {
+    // An invalid draft is RETAINED so the player can fix it, and the reason is
+    // shown rather than the draft silently vanishing (S03.2 item 6).
+    toast(record?.reason ?? 'the road cannot be built there', 'warn');
+    return;
+  }
+  // Commit the SAME geometry that was previewed, not a re-derived spline.
+  const result = runCommand({
+    kind: COMMAND_KIND.ADD_ROAD,
+    controls: record.controls,
+    cls: roadClass(),
+    pts: record.polyline,
+  });
   if (result) sfx.place();
-  draft = []; cursor.hide();
+  draft = []; draftRecord = null; cursor.hide();
 }
 
 function placeRoundabout(x, y) {
@@ -627,7 +664,15 @@ function select(x, y) {
 }
 
 // ---------- keyboard ----------
+// Snapping modifiers. Held, not toggled, so releasing restores the default.
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'Alt') snapDisabled = false;
+  if (e.key === 'Shift') angleSnap = false;
+  if (draft.length) refreshDraftRecord();
+});
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Alt' && !snapDisabled) { snapDisabled = true; if (draft.length) refreshDraftRecord(); }
+  if (e.key === 'Shift' && !angleSnap) { angleSnap = true; if (draft.length) refreshDraftRecord(); }
   // The scoping decision is pure (src/input.js): which target, which scope,
   // which key. Order matters - a form control always wins, then Escape, then
   // whatever dialog or panel is open, then the individual keys.
@@ -648,6 +693,14 @@ window.addEventListener('keydown', (e) => {
     case 'fit': fitCity(); return;
     case 'finish-road': finishRoad(); return;
     case 'toggle-speed': setSpeed(speed === 0 ? 1 : 0); return;
+    case 'draft-back':
+      // Only while drawing, and never below one point.
+      if (draft.length) {
+        draft = draft.slice(0, -1);
+        refreshDraftRecord();
+        sfx.click();
+      }
+      return;
     case 'bulldoze': setTool('bulldoze'); return;
     case 'undo': undo(); return;
     case 'redo': redo(); return;
@@ -663,7 +716,7 @@ window.addEventListener('keydown', (e) => {
 function escape() {
   if (ui.dialog) { closeHelp(); return; }
   if (ui.openPanel === 'menu') { showPanel(null); return; }
-  if (draft.length) { draft = []; return; }
+  if (draft.length) { draft = []; draftRecord = null; cursor.hide(); return; }
   if (inspectOpen()) { closeInspect(); return; }
   // Otherwise keep the current tool — deliberate: Esc no longer jumps to Select.
 }
@@ -892,6 +945,7 @@ function loop(now) {
   renderer.draw({
     net, traffic, eco, terrain,
     preview: draft,
+    draftRecord,
     mouseWorld,
     mouseScreen,
     tool: ui.activeTool,
@@ -980,6 +1034,7 @@ function boot() {
     // than infer it from CSS classes.
     get ui() { return ui; },
     get draftLength() { return draft.length; },
+    get draftRecord() { return draftRecord; },
     get accessStates() { return currentAccessStates(); },
     // Framing, so browser tests can assert the starter view and Fit without
     // reaching into renderer internals.

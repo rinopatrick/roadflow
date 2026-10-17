@@ -218,6 +218,11 @@ export function keyboardAction(ev, scope = {}) {
       : { action: 'none', preventDefault: false };
   }
 
+  // While a draft is open, Backspace removes the last draft point instead of
+  // switching to bulldoze: undoing one click is what the player means.
+  if (ev.key === 'Backspace' && hasDraft) {
+    return { action: 'draft-back', preventDefault: true };
+  }
   if (ev.key === 'Delete' || ev.key === 'Backspace') {
     return { action: 'bulldoze', preventDefault: false };
   }
