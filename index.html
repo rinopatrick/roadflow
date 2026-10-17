@@ -31,6 +31,8 @@
       </div>
       <button class="icon-btn" id="fitbtn" data-icon="fit" aria-label="Fit city"
               title="Fit the view to your city (F)"></button>
+      <button class="icon-btn" id="tplbtn" data-icon="layers" aria-label="Templates"
+              aria-haspopup="true" aria-expanded="false" title="Place a road template"></button>
       <button class="icon-btn" id="undobtn" data-icon="undo" aria-label="Undo"
               title="Undo the last edit (Ctrl+Z)" disabled></button>
       <button class="icon-btn" id="redobtn" data-icon="redo" aria-label="Redo"
@@ -38,6 +40,16 @@
       <button class="icon-btn" id="soundbtn" aria-pressed="true" title="Sound on"></button>
       <button class="icon-btn" id="menubtn" data-icon="menu" aria-label="Menu"
               aria-haspopup="true" aria-expanded="false" title="Save, load and city options"></button>
+      <div id="tplpop" role="menu" aria-label="Road templates" hidden>
+        <h4>Templates</h4>
+        <div id="tpllist"></div>
+        <div class="tpl-rotate">
+          <button class="menu-btn" id="tplRotL" aria-label="Rotate left">&minus;15&deg;</button>
+          <span id="tplAngle">0&deg;</span>
+          <button class="menu-btn" id="tplRotR" aria-label="Rotate right">+15&deg;</button>
+        </div>
+        <p id="tplHint" class="tpl-hint"></p>
+      </div>
       <div id="menupop" role="menu" aria-label="City options" hidden>
         <button class="menu-btn" id="btnSave" data-icon="save">Save</button>
         <button class="menu-btn" id="btnLoad" data-icon="load">Load</button>

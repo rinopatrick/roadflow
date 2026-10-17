@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
-  "nextTask": "S03.5",
+  "nextTask": "S04.1",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1637,7 +1637,7 @@
     },
     {
       "id": "S03.4",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S03.3"
       ],
@@ -1672,6 +1672,11 @@
           "command": "node scripts/mutate-s034.mjs (15 mutations, each restored after the run)",
           "exitCode": 0,
           "result": "15 of 15 caught, none ineffective. A upgrade ignores building overlap -> 2. B upgrade ignores the widened footprint on terrain -> 1. C same-class upgrade allowed -> 1. D a ring edge upgradeable -> 1. E radius bounds not enforced -> 1. F a radius swallowing an arm allowed -> 2. G a driveway inside the ring allowed -> 1. H closely spaced arms allowed -> 1. I a moved building colliding with itself -> 1. J a move spending stock -> 4. K a shared driveway reporting one building -> 1. L a ring reporting one edge -> 1. M the upgrade not changing the class -> 1. N the upgrade skipping validation -> 1. P the roundabout ignoring the requested radius -> 1. TWO needed investigation. O (removing an explicit claimDriveway from the move handler) was a genuine NO-OP: attachDriveway already claims the building idempotently, so that line was dead code and has been DELETED rather than kept unobservable. L initially hit only the ring-NODE branch while the test clicked a ring EDGE, so a second test was added that clicks a ring NODE - the two branches must agree, and now they are both covered."
+        },
+        {
+          "command": "operator approval of S03.4",
+          "exitCode": 0,
+          "result": "APPROVED. Operator accepted the safe upgrade validation, the roundabout radius rules, the relocation validator and the demolition preview. S03.5 is now eligible."
         }
       ],
       "notes": [
@@ -1682,18 +1687,57 @@
         "The demolition preview has two branches - a ring NODE and a ring EDGE - and both must report the entire ring, because a click near a junction and a click on the ring itself are the same demolition. Mutation L initially only covered one branch, which is why the second test exists.",
         "Relocation reuses evaluateBuildingPlacement with the moved building EXCLUDED from the overlap test and stock guaranteed, so a move can neither collide with itself nor spend inventory. The old driveway claim is released first, so a shared access node loses only this building's claim.",
         "Deliberately deferred: the roundabout radius is validated and honoured by the command, but there is no slider for it in the inspector yet; and building relocation is available as a command but has no drag or pick interaction. Both are UI on top of a correct, tested core, and DESIGN section 1 forbids exposing an inert control.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 567/567, npm run test:browser 68/68, soak 10 trips, 15/15 mutations caught.",
+        "Operator-approved."
       ]
     },
     {
       "id": "S03.5",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [
         "S03.4"
       ],
       "file": "stages/03-construction.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/templates.test.js",
+          "exitCode": 0,
+          "result": "tests 36, pass 36, fail 0. Covers: the three built-ins are valid with the promised shapes and centred near the origin; a minimal template validates and its bbox is derived; unknown top-level AND segment AND roundabout fields are REJECTED; a wrong schema or a future version is rejected naming the version this build reads; a template must be an object with a name and at least one segment; segment geometry is validated for shape, finiteness, coordinate bounds, road class and zero length; the segment count is bounded; roundabouts default their radius and are range-checked; a SUPPLIED bbox is ignored in favour of the derived one; rotation must be a multiple of 15 degrees; rotation preserves every segment length within 1e-9; translation moves points by exactly the offset; a 90-degree rotation maps x to y with no -0 leakage; transform is pure; non-finite translation is rejected; template handling never calls eval or new Function (both are replaced with throwers during the test); an executable-looking name is inert; JSON round-trips through serialize and parse; oversized input is rejected BEFORE parsing; malformed JSON and non-text input are rejected; a filename is built by allow-list so no path separator or parent reference survives; export produces a relative template centred on the origin; export excludes driveways and allows a whole ring; a PARTIAL roundabout export is refused with an explanation; exporting nothing or an unknown edge is refused; an exported template re-imports and places; templateCommand is plain JSON; a placed template builds as ONE undoable edit; a template with one unbuildable segment builds NOTHING; a rotated template builds at the rotated geometry; each built-in drives a legal trip after placement (house and shop on different arms, simulation completes a real trip); a roundabout marker actually produces a ring; and boundsOf is exact."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 603, pass 603, fail 0. Was 567 before this task; +36. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 69, pass 69, fail 0. Was 68; +1: a template places as one undoable edit from the real panel, asserting the panel lists exactly the three built-ins, a rotate step is exactly 15 degrees in both directions, placing builds roads as ONE history entry, and one undo removes every node the template created."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run."
+        },
+        {
+          "command": "node scripts/mutate-s035.mjs (17 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "17 of 17 caught, none ineffective, after one test gap was closed. A unknown template field ignored -> 1. B unknown segment field ignored -> 1. C future version accepted -> 1. D wrong schema accepted -> 1. E segment limit not enforced -> 1. F coordinates unbounded -> 1. G zero-length segment accepted -> 1. H supplied bbox trusted -> 1. I rotation not a multiple of 15 -> 1. J rotation does not rotate -> 1. K translation ignored -> 1. L oversize guard removed -> 1. M filename built by stripping instead of allow-list -> 1. N partial roundabout export allowed -> 1. O applyTemplate tolerates a failing segment -> 1. P applyTemplate skips terrain validation -> 1. Q (applyTemplate ignores roundabout markers) was initially a NO-OP: the crossroads segments exist either way, so the trip test passed with or without the ring. A test was added that asserts the ring itself exists, and Q now fails as required."
+        }
+      ],
+      "notes": [
+        "Created src/templates.js (closed-schema validation, pure rotation/translation, the three built-ins, templateCommand, exportTemplate, parseTemplate, serializeTemplate, templateFilename, boundsOf), test/templates.test.js (36 tests), scripts/mutate-s035.mjs. Modified src/worldCommands.js (the APPLY_TEMPLATE command), src/main.js (the templates panel: list, rotate stepper, placement at the view centre, one undo entry), index.html (the panel), src/ui.css (its styles), test/browser/ui.js (+1 test).",
+        "A TEMPLATE IS DATA, NEVER CODE. Every field is validated against a closed schema, unknown top-level, segment and roundabout fields are REJECTED rather than ignored, and a test replaces eval and Function with throwers while exercising the whole template path. An imported file therefore cannot smuggle behaviour in.",
+        "A TEMPLATE IS ONE TRANSACTION. Any failing segment aborts the whole template, so a partially placed shape is impossible, and one undo removes all of it. The roundabout markers are applied AFTER the segments, because a ring needs the junction its arms create.",
+        "The bounding box is DERIVED, never trusted. A supplied bbox could disagree with the geometry and mislead a preview, so validateTemplate recomputes it and discards whatever was given.",
+        "Rotation is limited to multiples of 15 degrees and there is no scaling: lane widths are physical, so a scaled template would claim pavement it does not have. This is the task's own 'avoid impossible lane scaling'.",
+        "Export refuses a PARTIAL roundabout with an explanation, because a partial ring would rebuild as a broken loop. Ring nodes are exempt from the dangling-connector check: a roundabout's arms always leave it, and the ring is self-connected, so exporting the ring alone is valid.",
+        "FIXTURE LESSON RE-LEARNED: applyWorldCommand hydrates a COPY from the snapshot, and a snapshot stores only the map SEED, so a mocked terrain is discarded and the real Terrain is rebuilt. Any test that goes through the command layer must use real terrain - the first version of two tests here scanned against the mock and therefore believed every coordinate was buildable.",
+        "Deliberately deferred to S05.4: interchange templates. The UI offers exactly the three implemented built-ins and nothing else, because DESIGN section 1 forbids an inert button for a feature that does not exist.",
+        "STAGE GATE: the stage-03 gate asks that a novice can draw, snap, grid, undo and upgrade without losing city state. Draw, snap, undo and upgrade are all wired and tested. The GRID has a correct, tested evaluator and command but no dock interaction yet, so that part of the gate is not honestly met and is recorded as the first item for stage 04's follow-up.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
     },
     {
       "id": "S04.1",

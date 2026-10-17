@@ -41,6 +41,7 @@ export const COMMAND_KIND = {
   ADD_GRID: 'addGrid',
   UPGRADE_ROAD: 'upgradeRoad',
   MOVE_BUILDING: 'moveBuilding',
+  APPLY_TEMPLATE: 'applyTemplate',
 };
 
 /** Every kind the dispatcher recognises. */
@@ -428,6 +429,64 @@ const HANDLERS = {
         return fail(`grid segment ${i + 1} could not be built: ${res.reason ?? 'unknown reason'}`);
       }
     }
+    return { ok: true };
+  },
+
+  /**
+   * Applies a whole template as ONE atomic command.
+   *
+   * Segments are built first and the roundabouts after, because a roundabout
+   * needs the junction its arms create. Any failing segment aborts the whole
+   * template: a partially placed template would leave the player with a shape
+   * they did not ask for and cannot easily remove.
+   */
+  [COMMAND_KIND.APPLY_TEMPLATE](world, cmd) {
+    const { segments, roundabouts = [] } = cmd;
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return fail('a template needs at least one segment');
+    }
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
+      const cls = s.cls ?? 'street';
+      try {
+        roadDimensions(cls);
+      } catch {
+        return fail(`template segment ${i + 1} has unknown road class: ${cls}`);
+      }
+      const pts = [s.from, s.to];
+      for (const p of pts) {
+        if (!Number.isFinite(p?.[0]) || !Number.isFinite(p?.[1])) {
+          return fail(`template segment ${i + 1} has non-finite geometry`);
+        }
+        if (!world.terrain.isRoadable(p[0], p[1])) {
+          return fail(`template segment ${i + 1} would cross water or rock`);
+        }
+      }
+      const res = world.net.addRoad(pts, cls, { pts });
+      if (!res.edgeIds.length && !/already runs along/.test(res.reason ?? '')) {
+        return fail(`template segment ${i + 1} could not be built: `
+          + `${res.reason ?? 'unknown reason'}`);
+      }
+    }
+
+    for (let i = 0; i < roundabouts.length; i++) {
+      const r = roundabouts[i];
+      // The junction is whatever node the arms created nearest the marker.
+      let best = null;
+      let bd = Infinity;
+      for (const node of world.net.nodes.values()) {
+        const d = Math.hypot(node.x - r.at[0], node.y - r.at[1]);
+        if (d < bd) { bd = d; best = node; }
+      }
+      if (!best || bd > 40) {
+        return fail(`template roundabout ${i + 1} found no junction to convert`);
+      }
+      const check = validateRoundaboutRadius(world, best.id, r.radius);
+      if (!check.ok) return fail(`template roundabout ${i + 1}: ${check.reason}`);
+      const made = world.net.makeRoundabout(best.id, r.radius);
+      if (!made) return fail(`template roundabout ${i + 1} could not be built`);
+    }
+
     return { ok: true };
   },
 

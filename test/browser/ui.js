@@ -2436,6 +2436,82 @@ test('ui: the bulldoze badge says what it would remove', async () => {
   }
 });
 
+// ---------- S03.5: local construction templates ----------
+
+test('ui: a template places as one undoable edit from the real panel', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // Move the camera to real buildable ground, so the template fits.
+    const centred = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let y = -1800; y <= 1600; y += 60) {
+        for (let x = -1800; x <= 1600; x += 60) {
+          let ok = true;
+          for (let i = -300; i <= 300 && ok; i += 50) {
+            for (let j = -300; j <= 300 && ok; j += 50) {
+              if (!state.terrain.isRoadable(x + i, y + j)) ok = false;
+            }
+          }
+          if (ok) {
+            renderer.cam.x = x;
+            renderer.cam.y = y;
+            renderer.cam.zoom = 1;
+            return [x, y];
+          }
+        }
+      }
+      return null;
+    });
+    assert.ok(centred, 'fixture must find buildable ground');
+
+    // The panel lists only the implemented built-ins.
+    await page.click('#tplbtn');
+    await page.waitForFunction(
+      () => document.getElementById('tplpop').offsetParent !== null, null, { timeout: 5000 });
+
+    const panel = await page.evaluate(() => ({
+      names: [...document.querySelectorAll('[data-template]')].map(b => b.dataset.template),
+      angle: document.getElementById('tplAngle').textContent,
+      expanded: document.getElementById('tplbtn').getAttribute('aria-expanded'),
+    }));
+    assert.deepEqual(panel.names, ['T junction', 'Four-way roundabout', 'Rectangular block'],
+      `the panel must offer the three built-ins, offered: ${panel.names.join(', ')}`);
+    assert.equal(panel.angle, '0\u00b0', 'it starts unrotated');
+    assert.equal(panel.expanded, 'true');
+
+    // Rotate once: the angle must advance by exactly 15 degrees.
+    await page.click('#tplRotR');
+    assert.equal(await page.evaluate(() => document.getElementById('tplAngle').textContent), '15\u00b0',
+      'a rotate step must be 15 degrees');
+    await page.click('#tplRotL');
+    assert.equal(await page.evaluate(() => document.getElementById('tplAngle').textContent), '0\u00b0',
+      'and rotating back must return to 0');
+
+    const before = await worldState(page);
+    await page.click('[data-template="T junction"]');
+    await page.waitForFunction(
+      () => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    const after = await worldState(page);
+    assert.ok(after.edges > before.edges, 'the template must build roads');
+    assert.equal(await page.evaluate(() => window.__rf.history.depth), 1,
+      'a template must be ONE history entry');
+
+    // One undo removes the whole template.
+    await page.click('#undobtn');
+    await page.waitForFunction(
+      (e) => window.__rf.state.net.edges.size === e, before.edges, { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.__rf.state.net.nodes.size), before.nodes,
+      'one undo must remove every node the template created');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {
