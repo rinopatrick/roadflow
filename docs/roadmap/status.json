@@ -1568,13 +1568,40 @@
     },
     {
       "id": "S03.3",
-      "status": "pending",
+      "status": "blocked",
       "dependsOn": [
         "S03.2"
       ],
       "file": "stages/03-construction.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/gridDraft.test.js (on branch task/S03.3-road-grid)",
+          "exitCode": 1,
+          "result": "25 pass, 1 FAIL: 'the analytical count holds at 30 degrees too - expected 24 edges, got 23'. The test is deliberately left failing rather than weakened. The 0-degree and 90-degree cases pass with exact analytical counts (16 nodes, 24 edges for a 4x4 lattice)."
+        },
+        {
+          "command": "diagnosis: which lattice edge is missing at 30 degrees",
+          "exitCode": 0,
+          "result": "The v=400 line (the grid's top edge, spanning u=0..600) is missing BOTH of its pieces beyond u=200: 'MISSING u-edge between (200,400) and (400,400)' and 'MISSING u-edge between (400,400) and (600,400)'. It exists as ONE unsplit edge spanning u=200..600 instead of two. The crossing that should split it is at (400,400), which is the ENDPOINT of the u=400 line (that line spans v=0..400 and ends exactly there). So: a crossing that lands on another edge's endpoint does not split the crossing edge."
+        },
+        {
+          "command": "minimal reproducers for the same shape",
+          "exitCode": 0,
+          "result": "All three minimal cases behave CORRECTLY: a crossing interior to both lines gives 5 nodes / 4 edges; a T-junction where a vertical line ends on a horizontal gives 4 nodes / 3 edges; and a vertical pre-split at v=133 followed by a horizontal at v=400 gives the correct 7 nodes / 6 edges with no duplicate node positions. So the defect needs the full grid's specific sequence and geometry, not merely 'a crossing at an endpoint'. Root cause is NOT yet isolated."
+        },
+        {
+          "command": "side effects found and fixed while diagnosing",
+          "exitCode": 0,
+          "result": "Two real defects were found in src/roadNetwork.js and fixed on the branch: (1) splitEdge created its node BEFORE checking that it could split, so a failed split left a DANGLING node sitting on an edge's interior with nothing connected - it now computes both slices first and returns null without creating anything. (2) addRoad's duplicate detection used only edgeBetween, which finds a direct edge; a road that an earlier edit split at its crossings is now a CHAIN, so re-drawing it laid a whole duplicate edge over the chain (committing the same grid twice gave 24 -> 48 edges). addRoad now skips a slice that is already paved, via a new _sliceCovered geometry test with a documented partial-overlap shortcut."
+        }
+      ],
+      "notes": [
+        "BLOCKED, not done. src/gridDraft.js and test/gridDraft.test.js are complete and correct at 0 and 90 degrees; the 30-degree analytical count is one edge short and the failing test is left in place. The work is committed on branch task/S03.3-road-grid (3b4d756) and deliberately NOT merged to roadmap/implementation, so the trunk stays green at 497/497 while the geometry defect is fixed in a focused session.",
+        "The remaining defect is in crossing resolution in src/roadNetwork.js, which S03.3 depends on rather than owns. A crossing that falls on another edge's ENDPOINT does not split the crossing edge, so one street piece of a rotated grid is never created. The minimal reproducers that isolate that shape all pass, so the trigger is sequence- or geometry-specific and needs a focused session with the full-grid reproducer.",
+        "Two genuine defects were fixed on the branch along the way and should be kept whatever happens to the grid: the dangling node from splitEdge's ordering, and the duplicate-edge-from-a-chain bug in addRoad. Both are pre-existing and both affect the single-road tool, not only the grid.",
+        "Why the grid itself is worth keeping: it is built in a LOCAL frame (u along the base, v along the normal) and transformed to world, so the same arithmetic covers every rotation; the analytical node/edge formula is asserted directly rather than inferred from a screenshot; and one failing segment rejects the whole grid with the offending index, so a half-built grid is impossible.",
+        "NEXT PROBE for whoever picks this up: instrument resolveCrossings to log every splitEdge call and its return for the full 30-degree grid, and find which (aId, s1, bId, s2) tuple fails to split the v=400 line at u=400. Check whether the `frontier.delete(aId)` + `break scan` restart drops the surviving piece."
+      ]
     },
     {
       "id": "S03.4",
