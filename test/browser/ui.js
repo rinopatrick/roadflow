@@ -2011,6 +2011,223 @@ test('ui: a new map clears the history so undo cannot resurrect the old city', a
   }
 });
 
+// ---------- S03.2: one authoritative road draft ----------
+
+/** One-sided Hausdorff between two world polylines, evaluated in the page. */
+const HAUSDORFF_FN = `
+  function hausdorff(a, b) {
+    const segDist = (px, py, ax, ay, bx, by) => {
+      const abx = bx - ax, aby = by - ay;
+      const len2 = abx * abx + aby * aby;
+      let t = len2 > 0 ? ((px - ax) * abx + (py - ay) * aby) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (ax + abx * t), py - (ay + aby * t));
+    };
+    const oneWay = (from, to) => {
+      let worst = 0;
+      for (const p of from) {
+        let nearest = Infinity;
+        for (let i = 1; i < to.length; i++) {
+          nearest = Math.min(nearest, segDist(p[0], p[1], to[i-1][0], to[i-1][1], to[i][0], to[i][1]));
+        }
+        if (to.length === 1) nearest = Math.hypot(p[0]-to[0][0], p[1]-to[0][1]);
+        if (nearest > worst) worst = nearest;
+      }
+      return worst;
+    };
+    if (!a.length || !b.length) return Infinity;
+    return Math.max(oneWay(a, b), oneWay(b, a));
+  }
+`;
+
+test('ui: the committed road is the previewed geometry, at DPR 2', async () => {
+  // The defect: the preview splined the raw controls in the renderer while
+  // addRoad splined them again with its own call, so straight mode with an
+  // intermediate control committed as a curve 13.8 wu away from the preview.
+  const run = await launchGame({
+    baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2,
+  });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y) && state.terrain.isRoadable(x + 200, y)
+            && state.terrain.isRoadable(x + 100, y - 80)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find buildable ground');
+
+    // Three points, so the curve/straight distinction is observable.
+    const [ax, ay] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    const [bx, by] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 100, y - 80), spot);
+    const [cx, cy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 200, y), spot);
+
+    await page.keyboard.press('1');
+    await page.mouse.click(ax, ay);
+    await page.mouse.click(bx, by);
+    await page.mouse.move(cx, cy);
+    await page.waitForTimeout(150);
+
+    // Capture the record the preview is drawn from, then commit.
+    const previewed = await page.evaluate(() => {
+      const r = window.__rf.draftRecord;
+      return r ? { ok: r.ok, polyline: r.polyline, controls: r.controls, length: r.length } : null;
+    });
+    assert.ok(previewed, 'the draft must produce an evaluated record');
+    assert.equal(previewed.ok, true, 'the fixture draft must be valid');
+    assert.ok(previewed.polyline.length >= 2, 'the record must carry a polyline');
+
+    await page.mouse.click(cx, cy);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    const committed = await page.evaluate(() => {
+      const out = [];
+      for (const e of window.__rf.state.net.edges.values()) out.push(...e.pts);
+      return out;
+    });
+    assert.ok(committed.length >= 2, 'the commit must produce geometry');
+
+    const d = await page.evaluate(([a, b, fnSrc]) => {
+      // eslint-disable-next-line no-new-func
+      const f = new Function(`${fnSrc}; return hausdorff;`)();
+      return f(a, b);
+    }, [previewed.polyline, committed, HAUSDORFF_FN]);
+
+    assert.ok(d <= 0.5,
+      `preview and committed geometry must agree within 0.5 wu, measured ${d} wu`);
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: Backspace removes the last draft point while drawing', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y) && state.terrain.isRoadable(x + 240, y)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find buildable ground');
+
+    const [ax, ay] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    const [bx, by] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 120, y), spot);
+    const [cx, cy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 240, y), spot);
+
+    await page.keyboard.press('1');
+    await page.mouse.click(ax, ay);
+    await page.mouse.click(bx, by);
+    await page.mouse.click(cx, cy);
+    assert.equal(await page.evaluate(() => window.__rf.draftLength), 3, 'three points drafted');
+
+    await page.keyboard.press('Backspace');
+    assert.equal(await page.evaluate(() => window.__rf.draftLength), 2,
+      'Backspace must remove exactly one draft point');
+    // And the tool must NOT have switched to bulldoze.
+    assert.equal(await page.evaluate(() => window.__rf.ui.snapshot().activeTool), 'road',
+      'Backspace while drawing must not switch to the bulldoze tool');
+
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+    assert.equal(await page.evaluate(() => window.__rf.draftLength), 0, 'the draft empties');
+
+    // With no draft, Backspace returns to its bulldoze meaning.
+    await page.keyboard.press('Backspace');
+    assert.equal(await page.evaluate(() => window.__rf.ui.snapshot().activeTool), 'bulldoze',
+      'with no draft open, Backspace selects the bulldoze tool as before');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: an invalid draft is retained and explains itself', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // Find a legal point and an illegal one, so the draft crosses water.
+    const pair = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      const t = state.terrain;
+      let bad = null;
+      for (let r = 200; r <= 1800 && !bad; r += 40) {
+        for (let a = 0; a < 360; a += 10) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (!t.isRoadable(x, y)) { bad = [x, y]; break; }
+        }
+      }
+      if (!bad) return null;
+      // A legal point near it.
+      for (let r = 40; r <= 600; r += 20) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(bad[0] + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(bad[1] + Math.sin(a * Math.PI / 180) * r);
+          if (t.isRoadable(x, y)) return { good: [x, y], bad };
+        }
+      }
+      return null;
+    });
+    assert.ok(pair, 'fixture must find a legal and an illegal point');
+
+    // Pan to the area so both points are on screen.
+    await page.evaluate(([x, y]) => {
+      const r = window.__rf.renderer;
+      r.cam.x = x; r.cam.y = y; r.cam.zoom = 1;
+    }, pair.bad);
+    await page.waitForTimeout(150);
+
+    const [gx, gy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), pair.good);
+    const [bx, by] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), pair.bad);
+
+    await page.keyboard.press('1');
+    await page.mouse.click(gx, gy);
+    await page.mouse.click(bx, by);
+    await page.waitForTimeout(150);
+
+    const record = await page.evaluate(() => {
+      const r = window.__rf.draftRecord;
+      return r ? { ok: r.ok, reason: r.reason, failAt: r.failAt } : null;
+    });
+    assert.ok(record, 'the draft must be evaluated');
+    assert.equal(record.ok, false, 'a draft into water must be invalid');
+    assert.ok(record.reason && record.reason.length > 8, `it must explain why, got ${record.reason}`);
+    assert.ok(record.failAt, 'and name where it failed');
+
+    // Committing it must be refused AND the draft retained so it can be fixed.
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+    assert.equal(await page.evaluate(() => window.__rf.state.net.edges.size), 0,
+      'an invalid commit must build nothing');
+    assert.ok(await page.evaluate(() => window.__rf.draftLength) > 0,
+      'an invalid draft must be RETAINED so the player can fix it, not silently dropped');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

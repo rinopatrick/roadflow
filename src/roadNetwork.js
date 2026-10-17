@@ -78,6 +78,28 @@ function controlArcPositions(controlCount, segIdx, cum, pts) {
   return sampleOf.map(k => cum[k === undefined ? pts.length - 1 : k]);
 }
 
+/**
+ * Arc position of each control point, derived by PROJECTING each control onto an
+ * authored polyline.
+ *
+ * Used when the caller supplies the geometry (S03.2): there is no `segIdx` to
+ * read, so each control's position is where it lies on the polyline. The result
+ * is forced monotonic non-decreasing, so a polyline that doubles back still
+ * yields ordered stations rather than two nodes in the wrong order.
+ */
+export function controlArcByProjection(controls, pts, cum) {
+  const total = cum[cum.length - 1];
+  let previous = 0;
+  return controls.map((c, i) => {
+    if (i === 0) return 0;
+    if (i === controls.length - 1) return total;
+    const { s } = projectOnPolyline(pts, cum, c[0], c[1]);
+    const clamped = Math.max(previous, Math.min(s, total));
+    previous = clamped;
+    return clamped;
+  });
+}
+
 export class RoadNetwork {
   // ids: optional createIdSource(). When supplied, generated node/edge IDs are
   // deterministic and survive save/load; without it, legacy uid() behaviour is
@@ -118,7 +140,19 @@ export class RoadNetwork {
    * @param {'street'|'avenue'|'highway'} [cls]
    * @returns {{nodeIds:string[], edgeIds:string[], reason:null|string}}
    */
-  addRoad(controls, cls = 'street') {
+  /**
+   * Builds a road.
+   *
+   * @param {Array<[number, number]>} controls control points
+   * @param {string} [cls] road class
+   * @param {{pts?: Array<[number, number]>}} [options] `pts` supplies the
+   *   AUTHORITATIVE sampled geometry, so a caller that already evaluated a draft
+   *   (src/roadDraft.js) commits exactly what it previewed instead of
+   *   re-deriving a spline. This is the backward-compatible options argument
+   *   CONTRACTS section 4 reserves for S03.2; omitting it keeps the old
+   *   behaviour of splining the controls.
+   */
+  addRoad(controls, cls = 'street', options = {}) {
     const created = { nodeIds: [], edgeIds: [], reason: null };
     const versionBefore = this.version;
 
@@ -140,14 +174,21 @@ export class RoadNetwork {
       return created;
     }
 
-    // 1. Authoritative geometry for the whole path.
-    const { pts, segIdx } = splinePoints(controls, 12);
+    // 1. Authoritative geometry for the whole path. When the caller supplies
+    // `options.pts`, that IS the authority: re-splining it here would silently
+    // commit different geometry from what was previewed.
+    const authored = Array.isArray(options?.pts) && options.pts.length >= 2 ? options.pts : null;
+    const { pts, segIdx } = authored
+      ? { pts: authored.map(p => [p[0], p[1]]), segIdx: null }
+      : splinePoints(controls, 12);
     const { cum, total } = polylineLengths(pts);
     if (!(total >= MIN_EDGE_LENGTH)) {
       created.reason = 'the road is too short to build';
       return created;
     }
-    const ctrlArc = controlArcPositions(n, segIdx, cum, pts);
+    const ctrlArc = authored
+      ? controlArcByProjection(controls, pts, cum)
+      : controlArcPositions(n, segIdx, cum, pts);
 
     // 2. Decide where to segment.
     const closed = span < NODE_SNAP;

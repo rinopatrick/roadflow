@@ -232,7 +232,7 @@ function computeReplacedEdges(beforeData, afterData, removedEdgeIds, addedEdgeId
  */
 const HANDLERS = {
   [COMMAND_KIND.ADD_ROAD](world, cmd) {
-    const { controls, cls = 'street' } = cmd;
+    const { controls, cls = 'street', pts = null } = cmd;
     if (!Array.isArray(controls) || controls.length < 2) {
       return fail('a road needs at least two control points');
     }
@@ -251,7 +251,10 @@ const HANDLERS = {
         return fail('roads cannot cross water or rock');
       }
     }
-    const res = world.net.addRoad(controls, cls);
+    // `pts` is the geometry the draft evaluator produced. Passing it through
+    // means the committed road IS the previewed road, rather than a second
+    // spline that happens to be similar.
+    const res = world.net.addRoad(controls, cls, pts ? { pts } : {});
     if (!res.edgeIds.length) return fail(res.reason ?? 'the road could not be built');
     return { ok: true };
   },

@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
-  "nextTask": "S03.2",
+  "nextTask": "S03.3",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1517,13 +1517,54 @@
     },
     {
       "id": "S03.2",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [
         "S03.1"
       ],
       "file": "stages/03-construction.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/roadDraft.test.js",
+          "exitCode": 0,
+          "result": "tests 28, pass 28, fail 0. Covers: CSS-pixel snap radius converted by zoom with a cap, and a degenerate zoom falling back to 1; node snapping within radius, a node beyond it NOT snapped, a node beating an edge when both are in range, an edge snapped mid-span, an explicit lock beating everything, snapping disabled entirely (Alt), angle snapping to 15 degrees preserving length, and a stable tie-break; THE headline case - a road with legal endpoints but water between them is REFUSED and names the point inside the water; sampling no further apart than MAX_SAMPLE_STEP; a road through a building refused; a valid draft reporting length and cost null; a collapsed draft refused; an unknown class refused before geometry; fewer than two points refused; straight mode with three controls committing as STRAIGHT rather than re-splined; an explicit pts argument overriding re-splining; the drafted polyline being exactly what addRoad builds for curve mode with the same segment length; committed geometry within 0.5 wu Hausdorff; control arc positions forced monotonic for a doubling-back polyline; purity (no mutation, no unseeded randomness); and every failure carrying an actionable reason."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 497, pass 497, fail 0. Was 469 before this task; +28 from test/roadDraft.test.js. The 454-line construction suite still passes, which matters because addRoad's signature changed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 65, pass 65, fail 0. Was 62; +3: the committed road is the previewed geometry measured by Hausdorff at DPR 2 (asserted <= 0.5 wu), Backspace removes the last draft point while drawing without switching to bulldoze and returns to its bulldoze meaning with no draft, and an invalid draft is retained with a reason and a failAt point rather than silently dropped."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run."
+        },
+        {
+          "command": "node scripts/mutate-s032.mjs (14 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "14 of 14 caught, none ineffective. A footprint validation checks only endpoints (the original defect) -> 1. B the sample step is so large nothing between endpoints is checked -> 3. C curve mode uses a different segment length from addRoad -> 1. D addRoad ignores the authored geometry and re-splines -> 2. E snap=false still snaps -> 1. F the node snap radius is not capped -> 2. G angle snap uses 30 degrees -> 1. H an edge beats a node (priority inverted) -> 2. I the building overlap check is skipped -> 1. J straight mode silently splines -> 1. K an unknown class is accepted -> 2. L a collapsed draft is accepted -> 2. M controlArcByProjection is not forced monotonic -> 1 (only after the helper was exported and given a direct test). N the draft reports a fictional cost -> 1."
+        },
+        {
+          "command": "node scripts/probe-draft.mjs",
+          "exitCode": 0,
+          "result": "Valid draft: ok true, length 274 wu, 25 sampled points; badge reads '274 wu Avenue'. Invalid draft into rock: ok false, reason 'the road would cross water or rock', failAt [324,429]; the preview draws a red ribbon with a ring marking the failure point and the badge reads 'Cannot build  the road would cross water or rock'. Inspected both captures.",
+          "artifact": "artifacts/s032-1792206023198"
+        }
+      ],
+      "notes": [
+        "Created src/roadDraft.js (evaluateRoadDraft as the single geometry authority, snapping with node/edge/angle priority and CSS-pixel radii capped in world units, footprint sampling, the spline that matches addRoad, preview intersections, Hausdorff), test/roadDraft.test.js (28 tests), scripts/mutate-s032.mjs, scripts/probe-draft.mjs. Modified src/roadNetwork.js (addRoad accepts a backward-compatible options argument carrying the authoritative `pts`, plus controlArcByProjection for authored geometry), src/worldCommands.js (the addRoad command carries `pts`), src/main.js (draftRecord, refreshDraftRecord, Alt/Shift snapping modifiers, Backspace removes a draft point, finishRoad commits the evaluated record and RETAINS an invalid draft), src/render.js (the preview draws the evaluated polyline instead of splining the raw controls, marks the failure point, and shows length instead of a price), src/input.js (the draft-back action), test/browser/ui.js (+3 cases).",
+        "THE PREVIEW AND THE COMMIT ARE NOW THE SAME GEOMETRY. There were THREE paths before: the renderer splined the raw control points for the preview, addRoad splined them again with its own call, and neither validated the road's footprint. Straight mode with an intermediate control committed as a CURVE 13.85 wu away from what was previewed - measured, not guessed. Now evaluateRoadDraft produces one record, the renderer draws its polyline, and addRoad receives that same polyline through its options argument. The acceptance criterion is met literally: the Hausdorff distance is 0 for the geometry, and the browser test asserts <= 0.5 wu end to end at DPR 2.",
+        "FOOTPRINT VALIDATION, NOT ENDPOINT VALIDATION. The old check tested only the control points, so a road whose two endpoints sat on land but which crossed a river between them was accepted. The polyline is now sampled every 4 wu and every sample must be roadable, and existing buildings are checked against the road's half-width. The failure carries the offending POINT, so the preview can mark where it went wrong instead of just refusing.",
+        "The length badge replaces a FICTIONAL COST. The old preview computed `Math.max(50, Math.round(len * 2))` and showed it as `$200`-style text, but no currency exists in the simulation, and DESIGN section 5 forbids showing a cost the core does not compute. The badge now shows the length in world units, and evaluateRoadDraft returns `cost: null` with a comment explaining why.",
+        "An invalid draft is RETAINED rather than silently dropped, so the player can backspace a point and fix it; the reason and the failure point stay on screen. Backspace is now a draft operation while drawing (removing one click) and returns to its bulldoze meaning when no draft is open, which is the least surprising split.",
+        "addRoad's signature gained a THIRD, optional argument. Every existing caller passes two arguments and keeps the old behaviour of splining the controls, which is why the 454-line construction suite still passes unchanged.",
+        "Deliberately deferred: the straight/curve mode toggle is plumbed through evaluateRoadDraft but the UI still drafts in curve mode only; exposing the toggle is a small follow-up. The angle-snap modifier is wired to Shift, which S02.5a had left unbound during drafting.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
     },
     {
       "id": "S03.3",
