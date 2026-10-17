@@ -19,6 +19,9 @@ import { ConstructionCursor, arrowDirection } from './construction.js';
 import { createHistory, COMMAND_KIND } from './worldCommands.js';
 import { evaluateRoadDraft, DRAFT_MODE } from './roadDraft.js';
 import { evaluateGridDraft } from './gridDraft.js';
+import {
+  builtinTemplates, transformTemplate, templateCommand, ROTATION_STEP_DEG,
+} from './templates.js';
 import { roadDimensions } from './roadProfiles.js';
 import {
   UPGRADE_CLASSES, ROUNDABOUT_RADIUS,
@@ -908,6 +911,83 @@ document.getElementById('fitbtn').addEventListener('click', () => {
   sfx.click();
 });
 document.getElementById('undobtn').addEventListener('click', () => { undo(); sfx.click(); });
+
+// ---------- templates ----------
+//
+// A template is placed at the centre of the current view, rotated in 15-degree
+// steps. Only the implemented built-ins are offered: an inert button for a
+// template that does not exist is exactly what DESIGN section 1 forbids.
+let templateAngle = 0;
+const TEMPLATES = builtinTemplates();
+
+function renderTemplateList() {
+  const list = document.getElementById('tpllist');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const t of TEMPLATES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'menu-btn';
+    btn.dataset.template = t.name;
+    btn.textContent = t.name;
+    btn.addEventListener('click', () => placeTemplate(t));
+    list.appendChild(btn);
+  }
+  document.getElementById('tplAngle').textContent = templateAngle + '\u00b0';
+}
+
+/**
+ * Places a template centred on the current view, as ONE undoable edit.
+ * The whole template is validated before it commits, so a partial placement
+ * cannot happen.
+ */
+function placeTemplate(template) {
+  const placed = transformTemplate(template, {
+    rotateDeg: templateAngle,
+    dx: renderer.cam.x,
+    dy: renderer.cam.y,
+  });
+  if (!placed.ok) { setTemplateHint(placed.reason, true); return; }
+  const result = runCommand(templateCommand(placed.template));
+  if (!result) {
+    setTemplateHint('that template does not fit here', true);
+    return;
+  }
+  sfx.place();
+  setTemplateHint(placed.template.name + ' placed.', false);
+  showTemplates(false);
+}
+
+function setTemplateHint(text, warn) {
+  const el = document.getElementById('tplHint');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('warn', !!warn);
+}
+
+function showTemplates(visible) {
+  const pop = document.getElementById('tplpop');
+  const btn = document.getElementById('tplbtn');
+  if (!pop || !btn) return;
+  pop.hidden = !visible;
+  btn.setAttribute('aria-expanded', String(visible));
+  if (visible) { showPanel(null); renderTemplateList(); }
+}
+
+document.getElementById('tplbtn')?.addEventListener('click', () => {
+  showTemplates(document.getElementById('tplpop').hidden);
+  sfx.click();
+});
+document.getElementById('tplRotL')?.addEventListener('click', () => {
+  templateAngle = ((templateAngle - ROTATION_STEP_DEG) % 360 + 360) % 360;
+  renderTemplateList();
+  sfx.click();
+});
+document.getElementById('tplRotR')?.addEventListener('click', () => {
+  templateAngle = (templateAngle + ROTATION_STEP_DEG) % 360;
+  renderTemplateList();
+  sfx.click();
+});
 document.getElementById('redobtn').addEventListener('click', () => { redo(); sfx.click(); });
 
   // Start screen: three options (DESIGN section 6).
@@ -1146,6 +1226,16 @@ function boot() {
     runCommand,
     grid: { evaluateGridDraft },
     demolitionPreview: (x, y) => demolitionPreview(getWorld(), x, y),
+    templates: {
+      list: () => TEMPLATES.map(t => ({ name: t.name, segments: t.segments.length })),
+      angle: () => templateAngle,
+      place: (name) => {
+        const t = TEMPLATES.find(x => x.name === name);
+        if (!t) return false;
+        placeTemplate(t);
+        return true;
+      },
+    },
     ROUNDABOUT_RADIUS,
     validateRoadUpgrade: (id, cls) => validateRoadUpgrade(getWorld(), id, cls),
     validateRoundaboutRadius: (id, r) => validateRoundaboutRadius(getWorld(), id, r),

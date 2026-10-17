@@ -14,7 +14,7 @@ node scripts/diagnose-gridlock.mjs   # exits 1 if any vehicle deadlocks
 node scripts/verify-backup.mjs <dir> # checkpoint manifest verification
 ```
 
-`npm test` reports **567 passes** and `npm run test:browser` **68**, as of S03.4. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
+`npm test` reports **603 passes** and `npm run test:browser` **69**, as of S03.5. Those counts only ever grow: every task adds tests and none may be removed or weakened. Browser scripts spawn their own server on a free port and tear it down themselves, so no pre-running `localhost:8080` is required. Set `BASE_URL` to reuse an existing server instead; the harness then owns nothing and kills nothing.
 
 `launchGame` accepts `deviceScaleFactor`, so a DPR 2 check is one option rather than a separate harness. The standing capture pass now includes desktop 1440x900 at DPR 2, compact 1024x768 at DPR 2 and wide 1920x1080 at DPR 1 (TESTING.md section 6), and asserts geometry rather than only producing images.
 
@@ -129,6 +129,12 @@ DESIGN forbids painting "a circular disk over every junction at every scale". It
 The fix is `capForNode(degree)`: round for a degree-2 BEND (where the pavement genuinely curves), square for 3+ (where the junction's own footprint supplies the fill).
 
 Same trap for shadows: an offset applied inside `ctx.rotate(rot)` rotates with the object. Use `offsetInRotatedFrame` to keep one fixed screen direction.
+
+### Pitfall: a mocked terrain does not survive the command layer
+
+A snapshot stores only the map **seed** (CONTRACTS section 7), so `hydrateWorld` rebuilds a real `Terrain` and any terrain mock passed to a fixture is **discarded**. Two S03.5 tests scanned against a mock that said every coordinate was buildable, then failed at commit against the real terrain.
+
+Any test that goes through `applyWorldCommand` must use real terrain (`new Terrain(seed)`) and ask it where it is legal to build. This is the same rule as the `hydrateWorld` aliasing pitfall below, from the other direction.
 
 ### Pitfall: a widening rule must check the whole length, not the centreline
 
@@ -282,6 +288,8 @@ Also freeze the clock (`[data-speed="0"]`) before any assertion that compares po
 | `node scripts/mutate-s033.mjs` | S03.3 | Mutation harness for the S03.3 guards (15 mutations, 14 caught; 1 documented as unobservable) |
 | `node --test test/construction-edits.test.js` | S03.4 | **Created.** Safe construction edits: road upgrade footprint and building clearance, roundabout radius bounds/arm length/chord/ driveway, building relocation excluding self and not spending stock, the demolition preview reporting whole rings and shared driveways, and twenty mixed edits with undo-all restoring the original snapshot. Pure, no canvas |
 | `node scripts/mutate-s034.mjs` | S03.4 | Mutation harness for the S03.4 guards (15 mutations, 15 caught) |
+| `node --test test/templates.test.js` | S03.5 | **Created.** Local construction templates: closed-schema rejection of unknown fields, version and schema checks, coordinate/segment/roundabout bounds, derived bbox, 15-degree rotation preserving length, no eval/Function anywhere, bounded parsing, allow-list filenames, export/import round trip, partial-ring refusal, one-undo placement, and each built-in driving a real trip. Pure, no canvas |
+| `node scripts/mutate-s035.mjs` | S03.5 | Mutation harness for the S03.5 guards (17 mutations, 17 caught) |
 | `node scripts/probe-buildings.mjs` | S02.4c | **Created.** Captures the building silhouettes close up and reports the variant each building wears |
 | `node scripts/probe-terrain.mjs` | S02.4b | **Created.** Measures chunking in the real renderer: tiles drawn vs generated, cache occupancy across a pan sweep, regeneration on revisit. Steady state should be 0 generated |
 | `node scripts/diagnose-projection.mjs` | S02.4a | **Created.** Measures the world<->screen round trip at DPR 1 and DPR 2 across zooms and prints the worst error. Should be 0 wu |
