@@ -17,10 +17,12 @@ const MUTATIONS = [
     from: '    working = hydrateWorld(copyData(before), {});',
     to: '    working = hydrateWorld(before, {});',
   },
-  // C removed: the undo/redo copy was proven redundant by construction - the
-  // entry is popped and discarded, so the restored world cannot alias a stored
-  // snapshot. The copy was deleted from src/worldCommands.js rather than kept
-  // as an unobservable guard.
+  // C is NOT in this list. The undo/redo copy is DEFENCE IN DEPTH: the entry is
+  // popped and discarded, so removing the copy changes no observable behaviour
+  // and no test can catch it. It is kept anyway (see the comment in
+  // src/worldCommands.js) because hydrateWorld does not copy its input, so a
+  // future change to peek instead of pop would silently reintroduce the aliasing
+  // bug. Listed here so the omission is deliberate rather than an oversight.
   {
     name: 'D: undo returns the current world instead of the snapshot',
     file: 'src/worldCommands.js',
@@ -68,16 +70,25 @@ const MUTATIONS = [
     to: "    world.eco.batch.house = (world.eco.batch.house || 0) + 1;",
   },
   {
-    // Incomplete as a single mutation: the fixture violates all three bounds, so
-    // removing only the cycle check leaves the greenRatio check to refuse it.
-    // All three must be mutated together for the guard to be observable.
-    name: 'L: setSignal skips the range validation',
+    // Each bound is mutated ALONE. This is only catchable because the test suite
+    // now has one isolated refusal test per bound; a combined fixture would let a
+    // surviving check refuse it and hide the mutation.
+    name: 'L1: setSignal skips the cycle lower bound',
     file: 'src/worldCommands.js',
-    parts: [
-      ['    if (!(Number.isFinite(cycle) && cycle >= SIGNAL_LIMITS.cycleMin && cycle <= SIGNAL_LIMITS.cycleMax)) {', '    if (false) {'],
-      ['      && greenRatio >= SIGNAL_LIMITS.greenRatioMin && greenRatio <= SIGNAL_LIMITS.greenRatioMax)) {', '      && false)) {'],
-      ['    if (!(Number.isFinite(offset) && offset >= 0 && offset <= cycle)) {', '    if (false) {'],
-    ],
+    from: '    if (!(Number.isFinite(cycle) && cycle >= SIGNAL_LIMITS.cycleMin && cycle <= SIGNAL_LIMITS.cycleMax)) {',
+    to: '    if (!(Number.isFinite(cycle) && cycle <= SIGNAL_LIMITS.cycleMax)) {',
+  },
+  {
+    name: 'L2: setSignal skips the green-ratio lower bound',
+    file: 'src/worldCommands.js',
+    from: '      && greenRatio >= SIGNAL_LIMITS.greenRatioMin && greenRatio <= SIGNAL_LIMITS.greenRatioMax)) {',
+    to: '      && greenRatio <= SIGNAL_LIMITS.greenRatioMax)) {',
+  },
+  {
+    name: 'L3: setSignal skips the offset upper bound',
+    file: 'src/worldCommands.js',
+    from: '    if (!(Number.isFinite(offset) && offset >= 0 && offset <= cycle)) {',
+    to: '    if (!(Number.isFinite(offset) && offset >= 0)) {',
   },
   {
     name: 'M: addRoad skips the road-class validation',
@@ -109,7 +120,11 @@ const only = process.argv.slice(2);
 const results = [];
 for (const m of MUTATIONS) {
   if (only.length && !only.some(p => m.name.startsWith(p))) continue;
-  const original = readFileSync(m.file, 'utf8');
+  const rawOriginal = readFileSync(m.file, 'utf8');
+  // Normalise to LF for matching: git checks these files out as CRLF on
+  // Windows, and a multi-line `from` pattern written with LF would never match.
+  const original = rawOriginal.replace(/\r\n/g, '\n');
+  const crlf = rawOriginal.includes('\r\n');
   const parts = m.parts ?? [[m.from, m.to]];
   const missing = parts.filter(([from]) => from && !original.includes(from));
   if (missing.length) {
@@ -120,6 +135,7 @@ for (const m of MUTATIONS) {
   for (const [from, to] of parts) {
     mutated = to === '' ? mutated.split(from).join('') : mutated.replace(from, to);
   }
+  if (crlf) mutated = mutated.replace(/\n/g, '\r\n');
   writeFileSync(m.file, mutated);
   let out = '';
   try {
@@ -127,7 +143,7 @@ for (const m of MUTATIONS) {
   } catch (err) {
     out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
   } finally {
-    writeFileSync(m.file, original);
+    writeFileSync(m.file, rawOriginal);
   }
   const failed = [...out.matchAll(/^✖ (.+?) \(/gm)].map(x => x[1]);
   const unique = [...new Set(failed)];

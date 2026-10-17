@@ -19,7 +19,7 @@ import { Terrain } from '../src/terrain.js';
 import { serializeWorld, hydrateWorld } from '../src/worldSnapshot.js';
 import {
   applyWorldCommand, createHistory, COMMAND_KIND, COMMAND_KINDS,
-  checkWorldInvariants, historyLimits,
+  checkWorldInvariants, historyLimits, SIGNAL_LIMITS,
 } from '../src/worldCommands.js';
 
 /** A complete, runnable world. Terrain comes from the seed, as in a real save. */
@@ -292,20 +292,88 @@ test('setSignal edits the light without changing topology', () => {
   assert.equal(r.change.topologyChanged, false, 'a signal is not a topology change');
 });
 
-test('setSignal refuses an out-of-range value without changing anything', () => {
+// Each range rule is tested IN ISOLATION: one bad field with the other two
+// legal. A combined fixture would let any single surviving check refuse it, so
+// mutating one bound would be invisible.
+function junctionWorld() {
   const w = roadWorld();
   let world = applyWorldCommand(w, { kind: COMMAND_KIND.ADD_ROAD, controls: [[-400, 0], [400, 0]], cls: 'street' }).world;
   world = applyWorldCommand(world, { kind: COMMAND_KIND.ADD_ROAD, controls: [[0, -400], [0, 400]], cls: 'street' }).world;
   const junction = [...world.net.nodes.values()].find(n => n.edges.size === 4);
-  const before = norm(world);
+  return { world, junction };
+}
 
+test('setSignal refuses a cycle below the minimum, with the other fields legal', () => {
+  const { world, junction } = junctionWorld();
+  const before = norm(world);
   const r = applyWorldCommand(world, {
     kind: COMMAND_KIND.SET_SIGNAL,
     nodeId: junction.id,
-    light: { cycle: -5, greenRatio: 9, offset: 0 },
+    light: { cycle: SIGNAL_LIMITS.cycleMin - 1, greenRatio: 0.42, offset: 0 },
   });
-  assert.equal(r.ok, false, 'a negative cycle and a 900% green ratio must be refused');
+  assert.equal(r.ok, false, 'a cycle below the minimum must be refused');
+  assert.match(r.reason, /cycle/i, `the reason must name the cycle, got: ${r.reason}`);
   assert.deepEqual(norm(r.world), before);
+});
+
+test('setSignal refuses a cycle above the maximum, with the other fields legal', () => {
+  const { world, junction } = junctionWorld();
+  const r = applyWorldCommand(world, {
+    kind: COMMAND_KIND.SET_SIGNAL,
+    nodeId: junction.id,
+    light: { cycle: SIGNAL_LIMITS.cycleMax + 1, greenRatio: 0.42, offset: 0 },
+  });
+  assert.equal(r.ok, false, 'a cycle above the maximum must be refused');
+  assert.match(r.reason, /cycle/i);
+});
+
+test('setSignal refuses a green ratio out of range, with the other fields legal', () => {
+  const { world, junction } = junctionWorld();
+  const before = norm(world);
+  for (const bad of [SIGNAL_LIMITS.greenRatioMin - 0.01, SIGNAL_LIMITS.greenRatioMax + 0.01]) {
+    const r = applyWorldCommand(world, {
+      kind: COMMAND_KIND.SET_SIGNAL,
+      nodeId: junction.id,
+      light: { cycle: 14, greenRatio: bad, offset: 0 },
+    });
+    assert.equal(r.ok, false, `green ratio ${bad} must be refused`);
+    assert.match(r.reason, /green ratio/i, `the reason must name the green ratio, got: ${r.reason}`);
+    assert.deepEqual(norm(r.world), before);
+  }
+});
+
+test('setSignal refuses an offset outside one cycle, with the other fields legal', () => {
+  const { world, junction } = junctionWorld();
+  const before = norm(world);
+  for (const bad of [-1, 15]) {  // cycle is 14 here, so 15 is past one cycle
+    const r = applyWorldCommand(world, {
+      kind: COMMAND_KIND.SET_SIGNAL,
+      nodeId: junction.id,
+      light: { cycle: 14, greenRatio: 0.42, offset: bad },
+    });
+    assert.equal(r.ok, false, `offset ${bad} must be refused against a 14s cycle`);
+    assert.match(r.reason, /offset/i, `the reason must name the offset, got: ${r.reason}`);
+    assert.deepEqual(norm(r.world), before);
+  }
+});
+
+test('setSignal accepts every bound value exactly', () => {
+  // The inverse of the four refusal tests: the bounds themselves are legal, so a
+  // check that drifted by one would be caught from the other side too.
+  const { world, junction } = junctionWorld();
+  const r = applyWorldCommand(world, {
+    kind: COMMAND_KIND.SET_SIGNAL,
+    nodeId: junction.id,
+    light: {
+      cycle: SIGNAL_LIMITS.cycleMin,
+      greenRatio: SIGNAL_LIMITS.greenRatioMin,
+      offset: 0,
+    },
+  });
+  assert.equal(r.ok, true, `the minimum bounds must be legal, got: ${r.reason}`);
+  const light = r.world.net.nodes.get(junction.id).light;
+  assert.equal(light.cycle, SIGNAL_LIMITS.cycleMin);
+  assert.equal(light.greenRatio, SIGNAL_LIMITS.greenRatioMin);
 });
 
 // -------------------------------------------------------- world invariants ---

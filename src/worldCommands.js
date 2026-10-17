@@ -480,10 +480,15 @@ export function createHistory(limit = HISTORY_DEFAULT_ENTRIES, byteLimit = HISTO
       if (!undoStack.length) return { ok: false, reason: 'nothing to undo', world };
       const entry = undoStack[undoStack.length - 1];
 
-      // No copy is needed here: this entry is popped and discarded below, so the
-      // restored world cannot alias anything the history still holds. The copy
-      // that matters is in applyWorldCommand, where the snapshot is also recorded.
-      const restored = hydrateWorld(entry.data, {});
+      // DEFENCE IN DEPTH, not a currently-observable guard. This entry is popped
+      // and discarded a few lines below, so today the restored world cannot alias
+      // anything the history still holds and the copy is redundant. It is kept
+      // because `hydrateWorld` does NOT copy its input (see the pitfall in
+      // TESTING.md), so the day undo is changed to peek instead of pop - or to
+      // retain the entry for a redo path - dropping this line would silently make
+      // the live world share memory with the history. A copy is far cheaper than
+      // rediscovering that bug.
+      const restored = hydrateWorld(copyData(entry.data), {});
       const problem = checkWorldInvariants(restored);
       if (problem) return { ok: false, reason: `cannot undo: ${problem}`, world };
 
@@ -502,8 +507,8 @@ export function createHistory(limit = HISTORY_DEFAULT_ENTRIES, byteLimit = HISTO
       if (!redoStack.length) return { ok: false, reason: 'nothing to redo', world };
       const entry = redoStack[redoStack.length - 1];
 
-      // As in undo: the entry is popped and discarded, so no copy is needed.
-      const restored = hydrateWorld(entry.data, {});
+      // As in undo: defence in depth against hydrateWorld aliasing its input.
+      const restored = hydrateWorld(copyData(entry.data), {});
       const problem = checkWorldInvariants(restored);
       if (problem) return { ok: false, reason: `cannot redo: ${problem}`, world };
 
