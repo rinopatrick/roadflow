@@ -16,6 +16,7 @@ import { LEVEL_XP } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
 import { tutorialStep, tutorialWorldSnapshot } from './tutorial.js';
 import { ConstructionCursor, arrowDirection } from './construction.js';
+import { createHistory, COMMAND_KIND } from './worldCommands.js';
 import { buildingVariant } from './render/buildings.js';
 import {
   pointerIntent, pushDraftPoint, PointerTracker, keyboardAction,
@@ -162,6 +163,10 @@ function replaceWorld(world) {
   dirty = false;   // a freshly adopted world has no unsaved edits
   clock.reset();
   closeInspect();
+  // A replaced world can carry the same net.version NUMBER as the one it
+  // replaced, so every version-keyed cache must be dropped, not compared.
+  accessCache = { version: -1, states: new Map() };
+  renderer.resetCaches();
   renderer.buildTerrain(terrain);
   updateBatchUI();
   hud.update(true);
@@ -239,6 +244,9 @@ function describeTool(id) {
 // pointer cannot leave the map dragging with no button held.
 const pointer = new PointerTracker();
 const cursor = new ConstructionCursor();
+// Undo/redo over full world snapshots (S03.1). One history for the session;
+// New map and Load clear it, because neither is an edit you can undo away.
+const history = createHistory();
 let mouseWorld = [0, 0];
 let mouseScreen = [0, 0];
 
@@ -308,6 +316,110 @@ canvas.addEventListener('wheel', (e) => {
   Object.assign(renderer.cam, renderer.zoomAt(e.offsetX, e.offsetY, renderer.cam.zoom * factor));
 }, { passive: false });
 
+/**
+ * Applies one command atomically, reconciles live traffic, and publishes the
+ * result through the single `replaceWorld` boundary.
+ *
+ * The command never mutates the live world: it works on a hydrated copy and
+ * returns it, so a refusal leaves the world exactly as it was (CONTRACTS 4.6).
+ *
+ * @param {{kind:string}} cmd a JSON command record
+ * @param {{reselect?:boolean}} [opts] `reselect` re-opens the inspector for the
+ *   current selection after publishing, so an edit that leaves the entity
+ *   intact (a signal change) does not dismiss the panel the player is in.
+ * @returns {object|null} the successful result, or null when refused
+ */
+function runCommand(cmd, { reselect = false } = {}) {
+  const sel = selected;
+  const result = history.execute(getWorld(), cmd);
+  if (!result.ok) {
+    toast(result.reason, 'warn');
+    return null;
+  }
+
+  // Reconcile BEFORE publishing: a car must never be left referencing an edge
+  // or building that the edit removed.
+  const c = result.change;
+  if (c.removedEdgeIds.length || c.removedBuildingIds.length) {
+    reconcileTrafficAfterEdit(result.world.traffic, {
+      removedEdgeIds: c.removedEdgeIds,
+      removedBuildingIds: c.removedBuildingIds,
+    });
+  }
+
+  replaceWorld(result.world);
+  // replaceWorld clears `dirty` because it also adopts loaded worlds; an edit
+  // is unsaved by definition.
+  dirty = true;
+  if (reselect) reselectEntity(sel);
+  updateBatchUI();
+  updateHistoryButtons();
+  return result;
+}
+
+/**
+ * Re-opens the inspector for a selection after the world was replaced.
+ * Does nothing when the entity is gone, so a deleted thing stays deleted.
+ */
+function reselectEntity(sel) {
+  if (!sel) return;
+  if (sel.kind === 'node') {
+    const node = net.nodes.get(sel.id);
+    if (!node) return;
+    selected = sel;
+    if (node.type === 'light') openLightInspect(node);
+    return;
+  }
+  if (sel.kind === 'building') {
+    const b = eco.buildings.get(sel.id);
+    if (!b) return;
+    selected = sel;
+    openBuildingInspect(b);
+  }
+}
+
+/**
+ * Rewinds the world and the simulation to the snapshot taken before the last
+ * edit, and pauses. Time cannot be rewound, so the game must stop rather than
+ * pretend the edit was undone while the clock kept running.
+ */
+function undo() {
+  const cam = { ...renderer.cam };
+  const result = history.undo(getWorld());
+  if (!result.ok) { toast(result.reason, 'warn'); return; }
+  replaceWorld(result.world);
+  // The camera stays where the player left it: only simulation and inventory
+  // are rewound.
+  Object.assign(renderer.cam, cam);
+  setSpeed(0);
+  dirty = true;
+  updateBatchUI();
+  updateHistoryButtons();
+  toast('City restored to before edit; paused.');
+}
+
+/** Restores the state the most recent undo moved away from. */
+function redo() {
+  const cam = { ...renderer.cam };
+  const result = history.redo(getWorld());
+  if (!result.ok) { toast(result.reason, 'warn'); return; }
+  replaceWorld(result.world);
+  Object.assign(renderer.cam, cam);
+  setSpeed(0);
+  dirty = true;
+  updateBatchUI();
+  updateHistoryButtons();
+  toast('Edit restored; paused.');
+}
+
+/** Keeps the toolbar buttons honest about what is available. */
+function updateHistoryButtons() {
+  const u = document.getElementById('undobtn');
+  const r = document.getElementById('redobtn');
+  if (u) u.disabled = history.depth === 0;
+  if (r) r.disabled = !history.canRedo;
+}
+
 function handlePrimary(wx, wy) {
   switch (ui.activeTool) {
     case 'road': case 'avenue': case 'highway': {
@@ -334,40 +446,37 @@ function roadClass() {
 
 function finishRoad() {
   if (draft.length < 2) { draft = []; return; }
-  const cls = roadClass();
-  // validate buildable
-  for (const [x, y] of draft) {
-    if (!terrain.isRoadable(x, y)) { toast('Roads can\'t cross water or rock!', 'warn'); return; }
-  }
-  const res = net.addRoad(draft, cls);
-  if (res.edgeIds.length) { sfx.place(); dirty = true; }
+  // The terrain and class validation live in the command handler, so the
+  // preview, the commit and the undo all consult one set of rules.
+  const result = runCommand({ kind: COMMAND_KIND.ADD_ROAD, controls: draft, cls: roadClass() });
+  if (result) sfx.place();
   draft = []; cursor.hide();
 }
 
 function placeRoundabout(x, y) {
   const n = net._snapNode(x, y);
   if (!n) { toast('Place roundabouts on a road junction (build roads first).', 'warn'); return; }
-  if (n.isRing) { toast('That junction is already a roundabout.', 'warn'); return; }
-  const res = net.makeRoundabout(n.id);
-  if (!res) { toast('That junction can\'t take a roundabout.', 'warn'); return; }
-  sfx.place();
-  dirty = true;
-  toast('Roundabout built — traffic circulates counterclockwise.');
+  const result = runCommand({ kind: COMMAND_KIND.MAKE_ROUNDABOUT, nodeId: n.id });
+  if (result) {
+    sfx.place();
+    toast('Roundabout built — traffic circulates counterclockwise.');
+  }
 }
 
 function placeLight(x, y) {
   const n = net._snapNode(x, y);
   if (!n) { toast('Place traffic lights on a road junction.', 'warn'); return; }
-  if (n.isRing) { toast('Bulldoze the roundabout first to put a light here.', 'warn'); return; }
-  if (n.type === 'light') { openLightInspect(n); return; }
-  if (n.edges.size < 2) { toast('Traffic lights need at least 2 road connections.', 'warn'); return; }
-  n.type = 'light';
-  if (!n.light) n.light = { cycle: 14, offset: 0, greenRatio: 0.42 };
-  sfx.place();
-  dirty = true;
-  net.version++;
-  openLightInspect(n);
-  selected = { kind: 'node', id: n.id };
+  if (n.type === 'light') { openLightInspect(n); selected = { kind: 'node', id: n.id }; return; }
+  const result = runCommand({
+    kind: COMMAND_KIND.SET_SIGNAL,
+    nodeId: n.id,
+    light: { cycle: 14, greenRatio: 0.42, offset: 0 },
+  });
+  if (result) {
+    sfx.place();
+    selected = { kind: 'node', id: n.id };
+    openLightInspect(result.world.net.nodes.get(n.id));
+  }
 }
 
 function openLightInspect(n) {
@@ -386,37 +495,31 @@ function openLightInspect(n) {
     if (key === 'greenRatio') { L.greenRatio = val; document.getElementById('vGreen').textContent = (val * 100).toFixed(0) + '%'; }
     if (key === 'offset') { L.offset = val; document.getElementById('vOffset').textContent = val + 's'; }
   }, 'light');
+
+  // `input` gives immediate feedback; `change` fires once on release and
+  // records ONE undoable command, rather than one per pixel of movement.
+  document.getElementById('insBody').querySelectorAll('input[type=range]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const live = net.nodes.get(n.id)?.light;
+      if (!live) return;
+      runCommand({ kind: COMMAND_KIND.SET_SIGNAL, nodeId: n.id, light: { ...live } }, { reselect: true });
+    });
+  });
 }
 
 function placeBuilding(type, x, y) {
-  if (!eco.canPlace(type)) {
-    // The control stays selectable so this reason is reachable, and the reason
-    // names the way forward rather than only the refusal (DESIGN section 1).
-    toast(depletionMessage(type), 'warn');
-    return;
-  }
-  const b = eco.place(type, x, y);
-  if (!b) {
-    toast(type === 'house' ? 'Can\'t place here — needs buildable land near a road.' : 'Can\'t place here (blocked, or no road within reach).', 'warn');
-    return;
-  }
-  // b.rot is assigned by Economy.place() from its seeded RNG, so it is
-  // reproducible for a given seed rather than re-randomised here.
-  sfx.place();
-  dirty = true;
-  updateBatchUI();
+  // The stock reason is spelled out by the command layer; a depleted tool keeps
+  // its progression hint from the dock's context line (DESIGN section 1).
+  if (!eco.canPlace(type)) { toast(depletionMessage(type), 'warn'); return; }
+  const result = runCommand({ kind: COMMAND_KIND.PLACE_BUILDING, type, x, y });
+  if (result) sfx.place();
 }
 
 function bulldoze(x, y) {
   // building?
   for (const b of eco.buildings.values()) {
     if (dist(x, y, b.x, b.y) < BUILDING_DEFS[b.type].size * 0.8) {
-      eco.remove(b.id);
-      eco.batch[b.type] = (eco.batch[b.type] || 0) + 1;
-      reconcileTraffic([], [b.id]);
-      sfx.bulldoze();
-      dirty = true;
-      updateBatchUI();
+      if (runCommand({ kind: COMMAND_KIND.REMOVE_BUILDING, id: b.id })) sfx.bulldoze();
       return;
     }
   }
@@ -424,32 +527,21 @@ function bulldoze(x, y) {
   const n = net._snapNode(x, y);
   const nodeHitR = 14 / renderer.cam.zoom;
   if (n && dist(x, y, n.x, n.y) < nodeHitR) {
-    if (n.isRing || (n.edges.size && [...n.edges].some(eid => net.edges.get(eid)?.ring))) {
-      // bulldozing any part of a roundabout removes the whole thing
-      net.removeRoundabout(n.id);
-      dirty = true;
-      toast('Roundabout removed.');
-    } else if (n.type === 'driveway' && n.buildingIds?.length) {
-      // Read the type BEFORE removing, so the refund matches what was destroyed.
-      // The previous version wrote `eco.batch[eco.buildings.get ? 'house' : 'house']++`,
-      // which is always 'house': bulldozing a shop or factory via its driveway
-      // refunded a house.
-      const ownerId = n.buildingIds[0];
-      const owner = eco.buildings.get(ownerId);
-      if (owner) {
-        const refundType = owner.type;
-        eco.remove(ownerId);
-        eco.batch[refundType] = (eco.batch[refundType] || 0) + 1;
-        reconcileTraffic([], [ownerId]);
-        dirty = true;
-        updateBatchUI();
+    const isRing = n.isRing || (n.edges.size && [...n.edges].some(eid => net.edges.get(eid)?.ring));
+    if (isRing) {
+      // Bulldozing any part of a roundabout removes the whole ring, and the
+      // command refuses anything that is not a ring.
+      if (runCommand({ kind: COMMAND_KIND.REMOVE_ROUNDABOUT, nodeId: n.id })) {
+        sfx.bulldoze();
+        toast('Roundabout removed.');
       }
-    } else {
-      net.removeNode(n.id);
-      dirty = true;
+    } else if (n.type === 'driveway' && n.buildingIds?.length) {
+      // Refunding through removeBuilding reads the type from the building
+      // record, so a shop can no longer refund a house.
+      if (runCommand({ kind: COMMAND_KIND.REMOVE_BUILDING, id: n.buildingIds[0] })) sfx.bulldoze();
+    } else if (runCommand({ kind: COMMAND_KIND.REMOVE_NODE, nodeId: n.id })) {
+      sfx.bulldoze();
     }
-    sfx.bulldoze();
-    net.version++;
     return;
   }
   // edge?
@@ -459,32 +551,14 @@ function bulldoze(x, y) {
     if (d < bd) { bd = d; best = e; }
   }
   if (best) {
-    // Capture affected edges/buildings BEFORE removing, so traffic can be
-    // reconciled instead of silently losing every car that used them.
-    const removedEdgeIds = [best.ring ? [...net.edges.values()].filter(e => e.ring).map(e => e.id) : best.id].flat();
-    if (best.ring) {
-      net.removeRoundabout(best.a);
-      toast('Roundabout removed.');
-    } else {
-      net.removeEdge(best.id);
-      toast('Road removed.');
+    const isRing = !!best.ring;
+    const cmd = isRing
+      ? { kind: COMMAND_KIND.REMOVE_ROUNDABOUT, nodeId: best.a }
+      : { kind: COMMAND_KIND.REMOVE_ROAD, edgeId: best.id };
+    if (runCommand(cmd)) {
+      sfx.bulldoze();
+      toast(isRing ? 'Roundabout removed.' : 'Road removed.');
     }
-    reconcileTraffic(removedEdgeIds);
-    sfx.bulldoze();
-    dirty = true;
-  }
-}
-
-/**
- * Reconciles the traffic simulation after a live edit so no trip is silently
- * lost: cars still on a legal route keep driving, others are rerouted, and the
- * rest are cancelled once with a recorded reason.
- */
-function reconcileTraffic(removedEdgeIds = [], removedBuildingIds = []) {
-  if (!removedEdgeIds.length && !removedBuildingIds.length) return;
-  const report = reconcileTrafficAfterEdit(traffic, { removedEdgeIds, removedBuildingIds });
-  if (report.cancelled.length) {
-    toast(`${report.cancelled.length} trip${report.cancelled.length === 1 ? '' : 's'} cancelled by the edit.`, 'warn');
   }
 }
 
@@ -504,15 +578,15 @@ function projectDist(e, x, y) {
   return { d: bd };
 }
 
-function select(x, y) {
-  // building first
-  for (const b of eco.buildings.values()) {
-    if (dist(x, y, b.x, b.y) < BUILDING_DEFS[b.type].size * 0.9) {
-      selected = { kind: 'building', id: b.id };
-      const def = BUILDING_DEFS[b.type];
-      const reachShop = b.type === 'house' ? !!eco.findDestination(b, 'shop') : '—';
-      const reachWork = b.type === 'house' ? !!eco.findDestination(b, 'factory') : '—';
-      openInspect(def.label, `
+/**
+ * The building inspector, in one place so a re-selection after an edit shows
+ * exactly the same panel as a fresh click.
+ */
+function openBuildingInspect(b) {
+  const def = BUILDING_DEFS[b.type];
+  const reachShop = b.type === 'house' ? !!eco.findDestination(b, 'shop') : '—';
+  const reachWork = b.type === 'house' ? !!eco.findDestination(b, 'factory') : '—';
+  openInspect(def.label, `
         <div class="row"><span>Position</span><span class="v">${b.x.toFixed(0)}, ${b.y.toFixed(0)}</span></div>
         ${b.residents ? `<div class="row"><span>Residents</span><span class="v">${b.residents}</span></div>` : ''}
         ${b.jobs ? `<div class="row"><span>Jobs</span><span class="v">${b.jobs}</span></div>` : ''}
@@ -520,6 +594,14 @@ function select(x, y) {
           <div class="row"><span>Reach shop</span><span class="v">${reachShop ? 'Yes' : 'No'}</span></div>
           <div class="row"><span>Reach work</span><span class="v">${reachWork ? 'Yes' : 'No'}</span></div>` : ''}
       `, undefined, b.type);
+}
+
+function select(x, y) {
+  // building first
+  for (const b of eco.buildings.values()) {
+    if (dist(x, y, b.x, b.y) < BUILDING_DEFS[b.type].size * 0.9) {
+      selected = { kind: 'building', id: b.id };
+      openBuildingInspect(b);
       return;
     }
   }
@@ -567,6 +649,8 @@ window.addEventListener('keydown', (e) => {
     case 'finish-road': finishRoad(); return;
     case 'toggle-speed': setSpeed(speed === 0 ? 1 : 0); return;
     case 'bulldoze': setTool('bulldoze'); return;
+    case 'undo': undo(); return;
+    case 'redo': redo(); return;
     case 'none': return;
   }
 
@@ -663,6 +747,9 @@ const menu = initMenu({
     // Only interrupt when there is something to lose (DESIGN section 1).
     if (dirty && !confirm('Start a new map? Unsaved progress is lost.')) return;
     newGame();
+    // A new city is not an edit of the old one: undo must never resurrect it.
+    history.clear();
+    updateHistoryButtons();
     toast('New map generated.');
   },
 });
@@ -672,6 +759,8 @@ document.getElementById('fitbtn').addEventListener('click', () => {
   fitCity();
   sfx.click();
 });
+document.getElementById('undobtn').addEventListener('click', () => { undo(); sfx.click(); });
+document.getElementById('redobtn').addEventListener('click', () => { redo(); sfx.click(); });
 
   // Start screen: three options (DESIGN section 6).
   document.getElementById('btnTutorial')?.addEventListener('click', () => {
@@ -901,6 +990,10 @@ function boot() {
     // The silhouette selector, so a test can assert what will be drawn.
     buildingVariant,
     get tutorial() { return tutorialStep(tutorialWorldSnapshot({ net, eco, camerasMoved })); },
+    // Undo/redo, so browser tests drive the real controls' target functions.
+    undo,
+    redo,
+    get history() { return { depth: history.depth, bytes: history.bytes, canRedo: history.canRedo, truncated: history.truncated }; },
     save: { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, importGame, exportGame, exportFilename },
     replaceWorld,
   };

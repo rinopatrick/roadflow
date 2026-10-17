@@ -1826,6 +1826,191 @@ test('ui: the light inspector labels every slider', async () => {
   } finally { await run.close(); }
 });
 
+// ---------- S03.1: atomic commands and undo/redo ----------
+
+test('ui: undo and redo restore the world through the real controls', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // Find ground the terrain actually allows, rather than assuming a pixel.
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y) && state.terrain.isRoadable(x + 240, y)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find buildable ground');
+
+    const before = await worldState(page);
+    assert.equal(before.edges, 0, 'a fresh city has no roads');
+    assert.equal(await page.evaluate(() => window.__rf.history.depth), 0,
+      'a fresh city has no history');
+
+    // Build a road.
+    const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    const [ex, ey] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 240, y), spot);
+    await page.keyboard.press('1');
+    await page.mouse.click(sx, sy);
+    await page.mouse.click(ex, ey);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    const built = await worldState(page);
+    assert.ok(built.edges > 0, 'the road must be built');
+    assert.equal(await page.evaluate(() => window.__rf.history.depth), 1, 'one edit, one history entry');
+    assert.equal(await page.evaluate(() => document.getElementById('undobtn').disabled), false,
+      'the Undo button must be enabled after an edit');
+
+    // Undo through the button.
+    await page.click('#undobtn');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size === 0, null, { timeout: 10000 });
+    const undone = await worldState(page);
+    assert.equal(undone.edges, 0, 'undo must remove the road');
+    assert.equal(undone.nodes, before.nodes, 'and every node the road created');
+
+    // Undo rewinds time, so it must pause rather than run on.
+    assert.equal(await page.evaluate(() => window.__rf.world.settings.speed), 0,
+      'undo must pause the simulation');
+    const toastText = await page.$$eval('#toasts .toast', els => els.map(e => e.textContent).join(' | '));
+    assert.match(toastText, /restored to before edit/i, `the player must be told, got: ${toastText}`);
+    assert.match(toastText, /paused/i, 'and told that time stopped');
+
+    // Redo through the button.
+    assert.equal(await page.evaluate(() => document.getElementById('redobtn').disabled), false,
+      'the Redo button must be enabled after an undo');
+    await page.click('#redobtn');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+    const redone = await worldState(page);
+    assert.equal(redone.edges, built.edges, 'redo must restore the road');
+    assert.equal(redone.nodes, built.nodes, 'and its nodes');
+
+    // The keyboard shortcuts do the same thing.
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size === 0, null, { timeout: 10000 });
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+    assert.equal((await worldState(page)).edges, built.edges,
+      'Ctrl+Z then Ctrl+Shift+Z must return to the same world');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: undoing a building restores the exact inventory', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y) && state.terrain.isRoadable(x + 300, y)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find buildable ground');
+
+    const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    const [ex, ey] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 300, y), spot);
+    await page.keyboard.press('1');
+    await page.mouse.click(sx, sy);
+    await page.mouse.click(ex, ey);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+
+    const stockBefore = await page.evaluate(() => window.__rf.state.eco.batch.house);
+
+    // Place a house at a point the road reaches.
+    const [hx, hy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 150, y - 70), spot);
+    await page.keyboard.press('6');
+    await page.mouse.click(hx, hy);
+    await page.waitForFunction(() => window.__rf.state.eco.buildings.size === 1, null, { timeout: 10000 });
+
+    const afterPlace = await page.evaluate(() => window.__rf.state.eco.batch.house);
+    assert.equal(afterPlace, stockBefore - 1, 'placing must consume exactly one house');
+
+    await page.click('#undobtn');
+    await page.waitForFunction(() => window.__rf.state.eco.buildings.size === 0, null, { timeout: 10000 });
+    const afterUndo = await page.evaluate(() => window.__rf.state.eco.batch.house);
+    assert.equal(afterUndo, stockBefore,
+      `undo must return exactly the consumed house, got ${afterUndo} from ${stockBefore}`);
+
+    // Undo again: the road, and no further refund.
+    await page.click('#undobtn');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size === 0, null, { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.__rf.state.eco.batch.house), stockBefore,
+      'a second undo must not refund again');
+
+    // With nothing left to undo the button must be disabled, not silent.
+    assert.equal(await page.evaluate(() => document.getElementById('undobtn').disabled), true,
+      'Undo must be disabled when the history is empty');
+  } finally {
+    await run.close();
+  }
+});
+
+test('ui: a new map clears the history so undo cannot resurrect the old city', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    const spot = await page.evaluate(() => {
+      const { renderer, state } = window.__rf;
+      for (let r = 100; r <= 1500; r += 50) {
+        for (let a = 0; a < 360; a += 15) {
+          const x = Math.round(renderer.cam.x + Math.cos(a * Math.PI / 180) * r);
+          const y = Math.round(renderer.cam.y + Math.sin(a * Math.PI / 180) * r);
+          if (state.terrain.isRoadable(x, y) && state.terrain.isRoadable(x + 240, y)) return [x, y];
+        }
+      }
+      return null;
+    });
+    assert.ok(spot, 'fixture must find buildable ground');
+
+    const [sx, sy] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x, y), spot);
+    const [ex, ey] = await page.evaluate(([x, y]) => window.__rf.renderer.worldToCss(x + 240, y), spot);
+    await page.keyboard.press('1');
+    await page.mouse.click(sx, sy);
+    await page.mouse.click(ex, ey);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__rf.state.net.edges.size > 0, null, { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.__rf.history.depth), 1);
+
+    // New map is not an edit: it must not be undoable.
+    // The city is dirty, so New map asks first; the harness's default handler
+    // DISMISSES dialogs, so this test must accept the confirmation explicitly.
+    page.removeAllListeners('dialog');
+    page.on('dialog', d => d.accept());
+    await menuAction(page, 'btnNew');
+    await page.waitForTimeout(500);
+    assert.equal(await page.evaluate(() => window.__rf.history.depth), 0,
+      'a new map must clear the history');
+    assert.equal(await page.evaluate(() => window.__rf.history.canRedo), false);
+    assert.equal(await page.evaluate(() => document.getElementById('undobtn').disabled), true,
+      'Undo must be unavailable on a new map');
+    assert.equal(await page.evaluate(() => window.__rf.state.net.edges.size), 0,
+      'and the new city has no roads');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {

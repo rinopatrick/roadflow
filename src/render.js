@@ -97,6 +97,23 @@ export class Renderer {
     };
   }
 
+  /**
+   * Drops every cache keyed on something that a world replacement can preserve.
+   *
+   * `_islandVersion` compares against `net.version`, and a REPLACED network can
+   * have the same version NUMBER as the one it replaced (both 1, for instance),
+   * so the cache would serve islands from a network that no longer exists. The
+   * same reasoning applies to the terrain caches. Called from the one place that
+   * adopts a new world, so a stale cache cannot outlive its world.
+   */
+  resetCaches() {
+    this._terrainSeed = null;
+    this._islandVersion = -1;
+    this._islands = null;
+    this._blobs = null;
+    this._tiles.clear();
+  }
+
   resize() {
     const dpr = window.devicePixelRatio || 1;
     this._dpr = dpr;

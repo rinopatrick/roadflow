@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
-  "nextTask": "S03.1",
+  "nextTask": "S03.2",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1457,13 +1457,56 @@
     },
     {
       "id": "S03.1",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [
         "S02.6"
       ],
       "file": "stages/03-construction.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/worldCommands.test.js",
+          "exitCode": 0,
+          "result": "tests 31, pass 31, fail 0. Covers: every declared kind is a JSON-safe identifier; a command survives a JSON round trip; an unknown kind is refused without touching the world; addRoad commits and reports a topology change; a failed addRoad leaves a byte-equivalent world (contract 4.6); a road over unbuildable terrain is refused with a reason; a degenerate road is refused without moving counters; placeBuilding consumes exactly one from stock; a failed placeBuilding consumes nothing and changes no counter; removeBuilding refunds the CORRECT type; removeBuilding of an unknown id is refused; removeRoad reports the removed edge; makeRoundabout converts a four-way junction; makeRoundabout on a dead end is refused; setSignal edits the light without a topology change; setSignal refuses out-of-range values; checkWorldInvariants accepts a healthy world and reports a dangling edge endpoint and a building with no access node; execute-then-undo restores the exact pre-edit snapshot; redo restores the exact post-edit snapshot; a failed command adds no history; a new action clears the redo stack; undo/redo on an empty history are refused not thrown; history is bounded by entry count and by bytes, with truncation reported; clear empties both stacks; twenty undo/redo cycles leave no duplicate IDs and no missing endpoints; an undo restores inventory exactly with no duplication; a snapshot with an active trip restores without double-counting XP; historyLimits documents 50 entries and 32 MiB."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 465, pass 465, fail 0. Was 434 before this task; +31 from test/worldCommands.test.js. No existing test weakened or removed."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 62, pass 62, fail 0. Was 59; +3: undo and redo restore the world through the real buttons and the Ctrl+Z / Ctrl+Shift+Z shortcuts, undo pauses the simulation and says 'City restored to before edit; paused.', undoing a building restores the exact inventory with no double refund, and New map clears the history so undo cannot resurrect the old city."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run. Routing every action through the command layer did not change simulation behaviour."
+        },
+        {
+          "command": "node scripts/mutate-s031.mjs (14 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "14 of 14 caught, none ineffective. A command mutates the world it was given -> 1. B the snapshot data is shared with the live world -> 1. D undo returns the current world instead of the snapshot -> 3. E a refused command still records history -> 1. F a new action does not clear the redo branch -> 1. G the entry limit is ignored -> 2. H the byte limit is ignored -> 1. J an unknown kind is dispatched anyway -> 1. K removeBuilding refunds a house whatever was destroyed -> 1. L setSignal skips the range validation -> 1. M addRoad skips the road-class validation -> 2. N addRoad skips the terrain validation -> 1. O a dangling building access reference is accepted -> 1. P a dangling edge endpoint is accepted -> 1. THREE mutations needed investigation. L was INCOMPLETE - mutating only the cycle check left the greenRatio check to refuse the same fixture, so all three range checks had to be mutated together. I (removing the invariant check from the dispatch path) was a SAFETY NET: every handler validates its own inputs, so no current command produces an invalid world and the call site cannot be observed failing; checkWorldInvariants is instead tested directly against deliberately corrupted worlds. C (copying the snapshot during undo) was proven REDUNDANT by construction - the entry is popped and discarded, so the restored world cannot alias a stored snapshot - and the copy was DELETED rather than kept as an unobservable guard."
+        },
+        {
+          "command": "node scripts/probe-undo.mjs",
+          "exitCode": 0,
+          "result": "Fresh city: both buttons disabled, both have inline SVG icons and accessible names. After building and undoing: Undo disabled (history empty), Redo enabled, simulation speed 0. Inspected topband-crop.png: the undo and redo icons sit in the top band beside Fit and Sound, with Undo greyed and Redo active, which is the state the probe recorded.",
+          "artifact": "artifacts/s031-1792203500667"
+        }
+      ],
+      "notes": [
+        "Created src/worldCommands.js (applyWorldCommand, createHistory, checkWorldInvariants, the command handlers, the change-record diff), test/worldCommands.test.js (31 tests), scripts/mutate-s031.mjs, scripts/probe-undo.mjs. Modified src/main.js (every construction action now runs through runCommand; undo/redo functions with pause and toast; updateHistoryButtons; reselectEntity so a signal edit keeps its inspector open; openBuildingInspect extracted; the signal sliders commit one command on release; New map clears the history), src/input.js (Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z after the scope guards), src/icons.js (undo/redo icons), index.html (undo/redo buttons), src/render.js (resetCaches), test/browser/ui.js (+3 cases).",
+        "THE CENTRAL DESIGN DECISION: a command never touches the world it was given. It runs against a hydrated COPY and returns that copy, so a refusal physically cannot leave partial state behind. That makes contract 4.6 ('a failed construction does not change graph, inventory, money, selection, RNG or ID counters') true BY CONSTRUCTION rather than by remembering to roll back a dozen individual mutations. The alternative - mutate then roll back - is where undo and partial-edit bugs live.",
+        "A REAL ALIASING BUG WAS FOUND AND FIXED DURING DEVELOPMENT, and it is the kind of thing this task exists to prevent. hydrateWorld does NOT copy its input: Economy.fromJSON stores the very building objects from data.buildings, and the live eco.batch aliases data.batch. Handing a stored snapshot straight to hydrateWorld therefore made the live world SHARE MEMORY with the recorded history, so a command that spent inventory silently rewrote the snapshot it was supposed to be able to return to. The test 'an undo restores inventory exactly, with no duplication' failed with 9 instead of 10. Every hydration now gets a deep copy. This was caught because the test compared exact inventory numbers rather than asserting 'undo worked'.",
+        "The change record is computed by DIFFING the before and after snapshots rather than by asking each handler to report its own edits. A handler that forgot to report a split would silently break live-traffic reconciliation; a diff cannot forget. replacedEdges is populated with the CONTRACTS shape (oldEdgeId, newEdgeId, oldStart, oldEnd, newStart, newEnd, orientation) by projecting each new edge's endpoints onto the removed edge's polyline, with a documented shortcut for the partial-rebuild case that S04.1 should extend.",
+        "Undo rewinds BOTH geometry and simulation, and pauses. DESIGN and CONTRACTS both require this: time cannot be rewound, so continuing to run after an undo would show a timeline that never happened. The camera deliberately stays where the player left it, so an undo does not also throw away their view.",
+        "A signal edit commits ONE command on the slider's `change` event (fired on release), not on every `input`. Without that, dragging a slider would create one history entry per pixel and undo would crawl back one pixel at a time.",
+        "ANOTHER REAL BUG FIXED, exposed by routing edits through replaceWorld: every version-keyed cache compared against net.version, but a REPLACED network can carry the same version NUMBER as the one it replaced (both 1, for instance). The access overlay served reachability from a network that no longer existed, which made the 'access layer reports real reachability' browser test fail. renderer.resetCaches() and an explicit accessCache reset now drop those caches from the single place that adopts a new world.",
+        "The old reconcileTraffic wrapper was deleted: runCommand calls reconcileTrafficAfterEdit directly with the diffed change record, so there is one reconciliation path and it cannot be skipped.",
+        "Deliberately deferred to S03.4 (which owns the semantics): the upgradeRoad and moveBuilding command kinds are in the CONTRACTS list but need profile validation and relocation rules that S03.4 defines. They are added to this same dispatcher there rather than guessed at here.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
     },
     {
       "id": "S03.2",
