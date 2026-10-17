@@ -35,6 +35,7 @@ export const COMMAND_KIND = {
   MAKE_ROUNDABOUT: 'makeRoundabout',
   REMOVE_ROUNDABOUT: 'removeRoundabout',
   SET_SIGNAL: 'setSignal',
+  ADD_GRID: 'addGrid',
 };
 
 /** Every kind the dispatcher recognises. */
@@ -316,6 +317,45 @@ const HANDLERS = {
     const isRing = n.isRing || [...n.edges].some(eid => world.net.edges.get(eid)?.ring);
     if (!isRing) return fail('that junction is not a roundabout');
     world.net.removeRoundabout(cmd.nodeId);
+    return { ok: true };
+  },
+
+  /**
+   * A whole road grid as ONE atomic command, so one undo removes it.
+   *
+   * Segments are committed in the evaluator's order (perpendicular lines first,
+   * then parallel ones), so each later segment sees the junctions the earlier
+   * ones created. Any failing segment aborts the whole grid: a half-built grid
+   * is worse than no grid, and the working copy is discarded by the dispatcher.
+   */
+  [COMMAND_KIND.ADD_GRID](world, cmd) {
+    const { segments, cls = 'street' } = cmd;
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return fail('a grid needs at least one road segment');
+    }
+    try {
+      roadDimensions(cls);
+    } catch {
+      return fail(`unknown road class: ${cls}`);
+    }
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const pts = Array.isArray(seg) ? seg : seg?.polyline;
+      if (!Array.isArray(pts) || pts.length < 2) {
+        return fail(`grid segment ${i + 1} has no usable geometry`);
+      }
+      for (const p of pts) {
+        if (!Number.isFinite(p?.[0]) || !Number.isFinite(p?.[1])) {
+          return fail(`grid segment ${i + 1} has non-finite geometry`);
+        }
+      }
+      const res = world.net.addRoad(pts, cls, { pts });
+      // A segment that is already fully paved is not a failure: committing the
+      // same grid twice is idempotent rather than an error.
+      if (!res.edgeIds.length && !/already runs along/.test(res.reason ?? '')) {
+        return fail(`grid segment ${i + 1} could not be built: ${res.reason ?? 'unknown reason'}`);
+      }
+    }
     return { ok: true };
   },
 

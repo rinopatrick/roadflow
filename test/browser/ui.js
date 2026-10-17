@@ -2228,6 +2228,96 @@ test('ui: an invalid draft is retained and explains itself', async () => {
   }
 });
 
+// ---------- S03.3: three-click road grid ----------
+
+test('ui: three clicks build a rotated grid as one undoable edit', async () => {
+  const run = await launchGame({ baseUrl: server.baseUrl, viewport: { width: 1440, height: 900 } });
+  try {
+    const { page } = run;
+    await dismissHelp(page);
+    await page.click('[data-speed="0"]');
+
+    // The fixture SEARCHES for an origin where the rotated grid actually
+    // evaluates. A rotated grid extends outside its axis-aligned square, so
+    // guessing a coordinate is what made the first version of this test fail on
+    // terrain rather than on the behaviour under test.
+    const built = await page.evaluate(() => {
+      const { evaluateGridDraft } = window.__rf.grid;
+      const rot = (p, deg) => {
+        const a = (deg * Math.PI) / 180;
+        return [p[0] * Math.cos(a) - p[1] * Math.sin(a), p[0] * Math.sin(a) + p[1] * Math.cos(a)];
+      };
+      const world = window.__rf.world;
+
+      let chosen = null;
+      for (let oy = -2000; oy <= 1600 && !chosen; oy += 60) {
+        for (let ox = -2000; ox <= 1600 && !chosen; ox += 60) {
+          const bOff = rot([400, 0], 30);
+          const cOff = rot([0, 400], 30);
+          const g = evaluateGridDraft(world, {
+            a: [ox, oy],
+            b: [ox + bOff[0], oy + bOff[1]],
+            c: [ox + cOff[0], oy + cOff[1]],
+          });
+          if (g.ok) chosen = g;
+        }
+      }
+      if (!chosen) return { ok: false, reason: 'fixture found no buildable area for a rotated grid' };
+
+      const before = {
+        nodes: window.__rf.state.net.nodes.size,
+        edges: window.__rf.state.net.edges.size,
+      };
+      const r = window.__rf.runCommand({ kind: 'addGrid', segments: chosen.segments, cls: 'street' });
+      return {
+        ok: !!r,
+        reason: r ? null : 'refused',
+        before,
+        after: {
+          nodes: window.__rf.state.net.nodes.size,
+          edges: window.__rf.state.net.edges.size,
+        },
+        depth: window.__rf.history.depth,
+        expected: {
+          nodes: chosen.frame.uStops.length * chosen.frame.vStops.length,
+          edges: chosen.frame.uStops.length * (chosen.frame.vStops.length - 1)
+            + chosen.frame.vStops.length * (chosen.frame.uStops.length - 1),
+        },
+        // Every segment must be a real lattice line at the requested rotation.
+        angles: chosen.segments.map((s) =>
+          Math.round(((Math.atan2(s.to[1] - s.from[1], s.to[0] - s.from[0]) * 180) / Math.PI + 360) % 360)),
+      };
+    });
+
+    assert.equal(built.ok, true, `the grid must commit: ${built.reason}`);
+    assert.equal(built.depth, 1, 'a whole grid must be ONE undo entry');
+    assert.equal(built.after.nodes - built.before.nodes, built.expected.nodes,
+      `expected ${built.expected.nodes} new nodes, got ${built.after.nodes - built.before.nodes}`);
+    assert.equal(built.after.edges - built.before.edges, built.expected.edges,
+      `expected ${built.expected.edges} new edges, got ${built.after.edges - built.before.edges}`);
+
+    // Every line must run at either 30 or 120 degrees: the grid is genuinely
+    // rotated, not axis-aligned.
+    for (const a of built.angles) {
+      assert.ok(a === 30 || a === 120,
+        `every grid line must run at 30 or 120 degrees, found ${a}`);
+    }
+
+    // One undo removes the entire grid.
+    await page.click('#undobtn');
+    await page.waitForFunction(
+      (e) => window.__rf.state.net.edges.size === e, built.before.edges, { timeout: 10000 });
+    const afterUndo = await page.evaluate(() => ({
+      nodes: window.__rf.state.net.nodes.size,
+      edges: window.__rf.state.net.edges.size,
+    }));
+    assert.deepEqual(afterUndo, built.before,
+      'one undo must remove the whole grid and leave the prior world');
+  } finally {
+    await run.close();
+  }
+});
+
 // ---------- captures ----------
 
 test('ui: captures every tool state at desktop and compact viewports', async () => {
