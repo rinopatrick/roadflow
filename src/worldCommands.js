@@ -18,6 +18,9 @@
 import { serializeWorld, hydrateWorld } from './worldSnapshot.js';
 import { polylineLengths, projectOnPolyline } from './core.js';
 import { roadDimensions } from './roadProfiles.js';
+import {
+  validateRoadUpgrade, validateRoundaboutRadius, validateBuildingMove,
+} from './constructionEdits.js';
 
 /**
  * The command kinds S03.1 owns: the actions that already exist.
@@ -36,6 +39,8 @@ export const COMMAND_KIND = {
   REMOVE_ROUNDABOUT: 'removeRoundabout',
   SET_SIGNAL: 'setSignal',
   ADD_GRID: 'addGrid',
+  UPGRADE_ROAD: 'upgradeRoad',
+  MOVE_BUILDING: 'moveBuilding',
 };
 
 /** Every kind the dispatcher recognises. */
@@ -306,8 +311,75 @@ const HANDLERS = {
     if (!n) return fail(`no junction with id ${cmd.nodeId}`);
     if (n.isRing) return fail('that junction is already a roundabout');
     if (n.edges.size < 3) return fail('a roundabout needs at least three road connections');
-    const res = world.net.makeRoundabout(cmd.nodeId);
+
+    // A radius change rebuilds the whole ring, so it is validated first: a
+    // radius that would swallow an arm or a building driveway is refused
+    // BEFORE anything is destroyed.
+    const radius = cmd.radius;
+    if (radius !== undefined) {
+      const check = validateRoundaboutRadius(world, cmd.nodeId, radius);
+      if (!check.ok) return fail(check.reason);
+    }
+
+    const res = world.net.makeRoundabout(cmd.nodeId, radius);
     if (!res) return fail('that junction cannot take a roundabout');
+    return { ok: true };
+  },
+
+  /**
+   * Widens or narrows ONE road in place.
+   *
+   * The edge ID and its topology are preserved, so active cars keep their
+   * routes; only the pavement width changes. The wider footprint is validated
+   * first, so an upgrade can never swallow an adjacent building.
+   */
+  [COMMAND_KIND.UPGRADE_ROAD](world, cmd) {
+    const check = validateRoadUpgrade(world, cmd.edgeId, cmd.cls);
+    if (!check.ok) return fail(check.reason);
+    const edge = world.net.edges.get(cmd.edgeId);
+    if (!edge) return fail(`no road with id ${cmd.edgeId}`);
+    edge.cls = cmd.cls;
+    // The pavement width changed, so anything cached against it must be
+    // invalidated. Topology did NOT change, so cars keep their routes.
+    world.net.version++;
+    return { ok: true };
+  },
+
+  /**
+   * Relocates a building, preserving its ID, type, trips and job ownership.
+   *
+   * The destination is validated with the SAME placement validator as a fresh
+   * placement, excluding the moved building from the overlap test. A move
+   * neither spends nor refunds stock.
+   */
+  [COMMAND_KIND.MOVE_BUILDING](world, cmd) {
+    const check = validateBuildingMove(world, cmd.id, cmd.x, cmd.y);
+    if (!check.ok) return fail(check.reason);
+
+    const b = world.eco.buildings.get(cmd.id);
+    if (!b) return fail(`no building with id ${cmd.id}`);
+    const oldNodeId = b.drivewayNode;
+
+    // Release the OLD access claim first: a shared driveway must lose only this
+    // building's claim, not the whole node.
+    world.net.detachDriveway(oldNodeId, b.id);
+
+    const target = check.drivewayTarget;
+    const driveway = world.net.attachDriveway(b.id, target.x, target.y, 400);
+    if (!driveway) {
+      // Reattach the old claim so a failed move leaves the building reachable.
+      world.net.attachDriveway(b.id, target.x, target.y, 400);
+      return fail('could not attach a driveway at the destination');
+    }
+    // No explicit claimDriveway here: attachDriveway already claims the building,
+    // and claiming is idempotent, so a second call would be dead code.
+
+    b.x = cmd.x;
+    b.y = cmd.y;
+    b.drivewayNode = driveway.id;
+    // The cached reachability is against the old position.
+    b.reach = null;
+    world.net.version++;
     return { ok: true };
   },
 

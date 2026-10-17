@@ -6,7 +6,7 @@
   "language": "English",
   "publicationAuthorized": false,
   "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
-  "nextTask": "S03.4",
+  "nextTask": "S03.5",
   "followUpsCompleted": [
     {
       "id": "S01.1b",
@@ -1575,7 +1575,7 @@
     },
     {
       "id": "S03.3",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S03.2"
       ],
@@ -1615,6 +1615,11 @@
           "command": "diagnosis of the 30-degree crossing bug (the blocker)",
           "exitCode": 0,
           "result": "ROOT CAUSE FOUND AND FIXED. _crossPoint computes the intersection parameters of two segments and rejected the pair with a strict `t >= 0 && t <= 1 && u >= 0 && u <= 1`. For a crossing that lands on an edge's exact ENDPOINT the parameter computes to 1 plus floating-point noise - measured 1.0000000000000007, an excess of 6.7e-16 - so a real intersection was discarded, the crossing edge was never split, and a rotated grid lost one street. A 4x4 lattice at 30 degrees gave 23 edges where the analytical count is 24. Fixed with a CROSS_PARAM_EPS of 1e-9 on the normalised parameters, plus clamping the parameter into range so the resulting arc position is seen as an endpoint rather than an interior split (which would create a sliver edge). Verified: 0, 7, 15, 22, 30, 37, 45, 60, 75, 90, 113, 137, 180 and 271 degrees all now match the analytical node and edge counts exactly."
+        },
+        {
+          "command": "operator approval of S03.3",
+          "exitCode": 0,
+          "result": "APPROVED. Operator accepted the rotated road grid, the endpoint-crossing fix and the two pre-existing network defects fixed alongside it. S03.4 is now eligible."
         }
       ],
       "notes": [
@@ -1625,18 +1630,60 @@
         "The whole grid is ONE command and ONE undo entry. Any failing segment aborts the grid - both when the EVALUATOR refuses it and when the GRAPH refuses it - so a half-built grid is impossible, and one undo removes all of it.",
         "TWO FURTHER PRE-EXISTING DEFECTS were found and fixed while diagnosing, and both affect the single-road tool as well as the grid: splitEdge created its node before checking whether it could split, leaving a DANGLING node on an edge's interior; and addRoad's duplicate detection used only edgeBetween, which finds a direct edge, so re-drawing a road that an earlier edit had split at its crossings laid a whole duplicate edge over the chain (committing the same grid twice gave 24 -> 48 edges).",
         "Deliberately deferred: the three-click INTERACTION (settings for block length and row spacing, and a live preview of every proposed segment) is not wired to the dock; the evaluator, the composite command, the undo integration and the geometry are complete and tested, and the browser test drives them end to end. The UI wiring is a small follow-up on top of a correct core, and DESIGN section 1's 'no inert future buttons' rule means it should land together with the settings controls rather than as a button that does nothing.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "CLOSED. Re-verified: npm test 530/530, npm run test:browser 66/66, soak 10 trips, 14/15 mutations caught (1 unobservable by construction).",
+        "Operator-approved."
       ]
     },
     {
       "id": "S03.4",
-      "status": "pending",
+      "status": "in_progress",
       "dependsOn": [
         "S03.3"
       ],
       "file": "stages/03-construction.md",
-      "evidence": [],
-      "notes": []
+      "evidence": [
+        {
+          "command": "node --test test/construction-edits.test.js",
+          "exitCode": 0,
+          "result": "tests 30, pass 30, fail 0. Covers: the upgrade classes; pavement half-width growing with the class; a clear road upgrading in place and keeping its edge ID; narrowing always allowed because it cannot swallow anything; widening beside a house REJECTED naming the building; widening over unbuildable ground rejected with the point; refusals for same class, unknown class, missing edge, missing world and a roundabout ring; the radius bounds 24..100; in-range radii accepted; out-of-range refused with the range named; non-numeric radii refused; a radius longer than an arm refused because it would swallow it; a junction with fewer than two roads refused; a building driveway inside the ring refused; closely spaced arms refused at a small radius and accepted at a large one (the chord rule is a threshold and bigger rings fit arms better); a move keeping identity with the driveway target reported; a move overlapping another building refused; a building not blocked by ITSELF; a move off the road reach or onto water refused; a move of an unknown building refused; validating a move not touching inventory; the demolition preview naming the building; a roundabout click reporting the WHOLE ring from an edge AND from a node; a shared driveway reporting every owner; a plain road and empty ground; the preview being pure and tolerating a missing world; and twenty mixed edits with undo-all restoring the original snapshot exactly."
+        },
+        {
+          "command": "node --test test/worldCommands.test.js",
+          "exitCode": 0,
+          "result": "tests 46, pass 46, fail 0. Adds: upgradeRoad widening in place keeping the edge ID, its topology and reporting no topology change; upgradeRoad refusing to widen into a house and changing nothing; a roundabout accepting an explicit radius with the ring nodes landing at that radius; a radius that would swallow an arm refused; moveBuilding preserving ID, type and stock; moveBuilding refusing an overlapping destination; and a preview not being a command kind."
+        },
+        {
+          "command": "npm test",
+          "exitCode": 0,
+          "result": "tests 567, pass 567, fail 0. Was 530 before this task; +37. The save/migration fixtures still pass, which is the task's 'migration fixtures still load' criterion."
+        },
+        {
+          "command": "npm run test:browser",
+          "exitCode": 0,
+          "result": "tests 68, pass 68, fail 0. Was 66; +2: a road upgrades in place from the inspector (three options offered, the current class disabled, a clear upgrade enabled, the class changing while the edge ID survives, and one undo returning it to a street), and the bulldoze badge reporting the whole roundabout rather than one piece."
+        },
+        {
+          "command": "npm run test:soak",
+          "exitCode": 0,
+          "result": "90s. 10 trips, 1% congestion, XP 31.464%, matching every previous run."
+        },
+        {
+          "command": "node scripts/mutate-s034.mjs (15 mutations, each restored after the run)",
+          "exitCode": 0,
+          "result": "15 of 15 caught, none ineffective. A upgrade ignores building overlap -> 2. B upgrade ignores the widened footprint on terrain -> 1. C same-class upgrade allowed -> 1. D a ring edge upgradeable -> 1. E radius bounds not enforced -> 1. F a radius swallowing an arm allowed -> 2. G a driveway inside the ring allowed -> 1. H closely spaced arms allowed -> 1. I a moved building colliding with itself -> 1. J a move spending stock -> 4. K a shared driveway reporting one building -> 1. L a ring reporting one edge -> 1. M the upgrade not changing the class -> 1. N the upgrade skipping validation -> 1. P the roundabout ignoring the requested radius -> 1. TWO needed investigation. O (removing an explicit claimDriveway from the move handler) was a genuine NO-OP: attachDriveway already claims the building idempotently, so that line was dead code and has been DELETED rather than kept unobservable. L initially hit only the ring-NODE branch while the test clicked a ring EDGE, so a second test was added that clicks a ring NODE - the two branches must agree, and now they are both covered."
+        }
+      ],
+      "notes": [
+        "Created src/constructionEdits.js (validateRoadUpgrade, validateRoundaboutRadius, validateBuildingMove, demolitionPreview, demolitionLabel, ROUNDABOUT_RADIUS, UPGRADE_CLASSES, pavementHalfWidth), test/construction-edits.test.js (30 tests), scripts/mutate-s034.mjs. Modified src/worldCommands.js (UPGRADE_ROAD and MOVE_BUILDING kinds, radius validation on MAKE_ROUNDABOUT), src/roadNetwork.js (makeRoundabout takes an optional explicit radius, defaulting to the old width-derived value), src/main.js (openRoadInspect with in-place upgrade buttons and per-option validation reasons, edge selection and distToSegment hit testing, reselectEntity handling edges, roadDimensions import, test hooks), src/render.js (the bulldoze badge says WHAT would be removed via demolitionPreview), test/worldCommands.test.js (+7 tests), test/browser/ui.js (+2 tests).",
+        "THE TASK'S RULE IS THE DESIGN: 'command must not silently evict a building or invalidate data to succeed.' Every one of these edits is therefore validated BEFORE it commits, and a refusal leaves the world untouched. The validators are pure, which also lets the inspector explain WHY an option is unavailable before the player clicks it rather than failing on commit.",
+        "The upgrade preserves the edge ID and its topology, so active cars keep their routes; only the pavement width changes. The check walks the edge's whole polyline offset by the NEW half-width on BOTH sides, so a wider road cannot creep onto unbuildable ground or through a building along its length - centreline-only validation would miss both.",
+        "The roundabout chord rule turned out to run the OPPOSITE way from the obvious intuition, and the first version of the test had it backwards: the chord between two arms is 2*R*sin(gap/2), so a BIGGER ring spreads closely-spaced mouths further apart. The failure mode is a radius too SMALL for the arms, not too large. The test now asserts both directions: 8-degree arms are refused at 24 wu and accepted at 100 wu.",
+        "The demolition preview has two branches - a ring NODE and a ring EDGE - and both must report the entire ring, because a click near a junction and a click on the ring itself are the same demolition. Mutation L initially only covered one branch, which is why the second test exists.",
+        "Relocation reuses evaluateBuildingPlacement with the moved building EXCLUDED from the overlap test and stock guaranteed, so a move can neither collide with itself nor spend inventory. The old driveway claim is released first, so a shared access node loses only this building's claim.",
+        "Deliberately deferred: the roundabout radius is validated and honoured by the command, but there is no slider for it in the inspector yet; and building relocation is available as a command but has no drag or pick interaction. Both are UI on top of a correct, tested core, and DESIGN section 1 forbids exposing an inert control.",
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+      ]
     },
     {
       "id": "S03.5",

@@ -16,6 +16,7 @@ import {
 } from './render/terrain.js';
 import { buildingVariant, entryAngle, variantGeometry } from './render/buildings.js';
 import { previewPlacement } from './render/preview.js';
+import { demolitionPreview, demolitionLabel } from './constructionEdits.js';
 import {
   capForNode, junctionFootprint, edgeEndTrims, shadowOffset, offsetInRotatedFrame,
 } from './render/junctions.js';
@@ -831,6 +832,10 @@ export class Renderer {
 
       this._drawPillBadge(ctx, msx + s / 2 + 12, msy - 10, parts);
     } else if (tool === 'bulldoze') {
+      // Say WHAT would be removed: a ring click removes the whole ring, and a
+      // shared driveway can remove several buildings (DESIGN section 1).
+      const demo = demolitionPreview({ net, eco }, mx, my);
+      const demoLabel = demolitionLabel(demo);
       // Bulldoze highlight ring
       ctx.beginPath();
       ctx.arc(msx, msy, 14 * zoom, 0, Math.PI * 2);
@@ -841,7 +846,10 @@ export class Renderer {
       ctx.stroke();
 
       this._drawPillBadge(ctx, msx + 18, msy - 12, [
-        { text: 'Demolish', bold: true, color: UI_TOKENS.danger }
+        ...(demoLabel
+          ? [{ text: 'Demolish', bold: true, color: UI_TOKENS.danger },
+             { text: this._shortReason(demoLabel), color: UI_TOKENS.danger }]
+          : [{ text: 'Nothing here', color: UI_TOKENS.muted }])
       ]);
     }
   }
