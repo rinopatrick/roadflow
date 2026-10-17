@@ -216,6 +216,7 @@ export class RoadNetwork {
 
     // 3. Create nodes and edges between consecutive stations.
     const lastIndex = stations.length - 1;
+    let skipped = 0;
     for (let j = 0; j < lastIndex; j++) {
       const A = stations[j];
       const B = stations[j + 1];
@@ -235,14 +236,23 @@ export class RoadNetwork {
       const slice = slicePolyline(pts, cum, A.s, B.s);
       if (!slice) continue;
 
+      // A road may already run along this slice as a CHAIN of edges rather than
+      // one edge, because an earlier road split it at its crossings. In that case
+      // `edgeBetween` above finds nothing and this would lay a duplicate edge
+      // over the whole chain - which is exactly what happened when the same road
+      // grid was committed twice. Skip a slice that is already paved.
+      if (this._sliceCovered(slice)) { skipped++; continue; }
+
       const edge = this._makeEdgeFromPts(A.node.id, B.node.id, cls, slice);
       created.edgeIds.push(edge.id);
     }
 
     if (!created.edgeIds.length) {
       this._rollback(created, versionBefore);
-      created.reason = `the road is shorter than the snapping distance `
-        + `(${NODE_SNAP} wu), so its ends would land on the same node`;
+      created.reason = skipped > 0
+        ? 'a road already runs along that path'
+        : `the road is shorter than the snapping distance `
+          + `(${NODE_SNAP} wu), so its ends would land on the same node`;
       return created;
     }
 
@@ -469,14 +479,21 @@ export class RoadNetwork {
     if (!edge) return null;
     if (!(s > 0) || !(s < edge.total)) return null; // must be strictly interior
 
+    // Compute BOTH slices BEFORE creating anything. The old order created the
+    // node first and then returned early when a slice was degenerate, which left
+    // a dangling node sitting on the edge's interior with nothing connected to
+    // it - a node that is not an endpoint of any road. It also meant a caller
+    // that saw a non-null return believed the edge had been split when it had
+    // not, so crossing resolution could give up on a junction that still needed
+    // making.
+    const ptsA = slicePolyline(edge.pts, edge.cum, 0, s);
+    const ptsB = slicePolyline(edge.pts, edge.cum, s, edge.total);
+    if (!ptsA || !ptsB) return null; // cannot split: change nothing at all
+
     const p = pointAt(edge.pts, edge.cum, s);
     let node = this._snapNodeWithin(p.x, p.y, 4);
     if (node && (node.id === edge.a || node.id === edge.b)) return node; // already at an endpoint
     if (!node) node = this._makeNode(p.x, p.y, 'plain');
-
-    const ptsA = slicePolyline(edge.pts, edge.cum, 0, s);
-    const ptsB = slicePolyline(edge.pts, edge.cum, s, edge.total);
-    if (!ptsA || !ptsB) return node; // degenerate slice: keep the node, change nothing
 
     const aId = edge.a;
     const bId = edge.b;
@@ -828,6 +845,62 @@ export class RoadNetwork {
       if (e && (e.a === bId || e.b === bId)) return e;
     }
     return null;
+  }
+
+  /**
+   * True when every point of `slice` already lies on some existing edge.
+   *
+   * `edgeBetween` is not enough to detect a duplicate road: a road that an
+   * earlier edit split at its crossings is now a CHAIN of edges, so the two
+   * endpoints of a re-drawn road are joined by several edges rather than one and
+   * the node-pair check finds nothing. This asks the geometry instead.
+   *
+   * shortcut: the test is "every sample is near some edge", so a slice that is
+   * only PARTLY paved is treated as new and may lay a duplicate over the paved
+   * half. In practice addRoad's stations fall on control points and crossings, so
+   * a slice between two consecutive stations is wholly new or wholly existing.
+   * S03.4's upgrade path should revisit this if partial overlaps become reachable.
+   *
+   * @param {Array<[number,number]>} slice
+   * @param {number} [tol] how close a sample must be, in wu
+   */
+  _sliceCovered(slice, tol = 0.75) {
+    if (!Array.isArray(slice) || slice.length < 2 || !this.edges.size) return false;
+
+    // Cheap bounding box per edge, so a long road in a large city does not
+    // project every sample against every edge.
+    const boxes = [];
+    for (const e of this.edges.values()) {
+      if (!Array.isArray(e.pts) || e.pts.length < 2) continue;
+      let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
+      for (const [x, y] of e.pts) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+      boxes.push({ e, minX, minY, maxX, maxY });
+    }
+
+    for (let i = 1; i < slice.length; i++) {
+      const a = slice[i - 1];
+      const b = slice[i];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const steps = Math.max(1, Math.ceil(len / 8));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps;
+        const x = a[0] + (b[0] - a[0]) * t;
+        const y = a[1] + (b[1] - a[1]) * t;
+        let covered = false;
+        for (const box of boxes) {
+          if (x < box.minX - tol || x > box.maxX + tol
+            || y < box.minY - tol || y > box.maxY + tol) continue;
+          if (projectOnPolyline(box.e.pts, box.e.cum, x, y).d <= tol) { covered = true; break; }
+        }
+        if (!covered) return false;
+      }
+    }
+    return true;
   }
 
   otherEnd(edge, nodeId) { return edge.a === nodeId ? edge.b : edge.a; }
