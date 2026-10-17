@@ -1457,7 +1457,7 @@
     },
     {
       "id": "S03.1",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02.6"
       ],
@@ -1493,6 +1493,11 @@
           "exitCode": 0,
           "result": "Fresh city: both buttons disabled, both have inline SVG icons and accessible names. After building and undoing: Undo disabled (history empty), Redo enabled, simulation speed 0. Inspected topband-crop.png: the undo and redo icons sit in the top band beside Fit and Sound, with Undo greyed and Redo active, which is the state the probe recorded.",
           "artifact": "artifacts/s031-1792203500667"
+        },
+        {
+          "command": "follow-up on the two mutations that were not cleanly caught (L and C)",
+          "exitCode": 0,
+          "result": "BOTH ADDRESSED, in different ways because they were different problems. L was an INCOMPLETE TEST, not a weak guard: the single fixture violated cycle AND greenRatio at once, so removing one bound left the other to refuse it. The suite now has one isolated refusal test per bound (cycle below min, cycle above max, green ratio out of range, offset outside one cycle) plus a positive test that the bound values themselves are accepted. L is therefore split into three SINGLE-bound mutations (L1, L2, L3) and each is now caught by its own test - verified individually. C was a genuinely UNOBSERVABLE guard, and the copy has been RESTORED anyway: the undo/redo entry is popped and discarded, so removing the copy changes no behaviour today, but hydrateWorld does not copy its input, so a future change to peek instead of pop would silently reintroduce the snapshot-aliasing bug. The comment in the code says exactly that, and the mutation harness lists C as a deliberate, documented omission rather than an oversight. Final tally: 16 of 16 observable mutations caught, 0 ineffective, 1 documented defence-in-depth guard that no test can catch."
         }
       ],
       "notes": [
@@ -1505,7 +1510,9 @@
         "ANOTHER REAL BUG FIXED, exposed by routing edits through replaceWorld: every version-keyed cache compared against net.version, but a REPLACED network can carry the same version NUMBER as the one it replaced (both 1, for instance). The access overlay served reachability from a network that no longer existed, which made the 'access layer reports real reachability' browser test fail. renderer.resetCaches() and an explicit accessCache reset now drop those caches from the single place that adopts a new world.",
         "The old reconcileTraffic wrapper was deleted: runCommand calls reconcileTrafficAfterEdit directly with the diffed change record, so there is one reconciliation path and it cannot be skipped.",
         "Deliberately deferred to S03.4 (which owns the semantics): the upgradeRoad and moveBuilding command kinds are in the CONTRACTS list but need profile validation and relocation rules that S03.4 defines. They are added to this same dispatcher there rather than guessed at here.",
-        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint."
+        "STATUS: implementation and every check pass. Held at in_progress for the operator review checkpoint.",
+        "FOLLOW-UP (operator-requested): completed L by isolating each signal range rule into its own test, so mutating any single bound is caught; restored the undo/redo snapshot copy as documented defence-in-depth after establishing that it is unobservable by construction. The mutation harness is now EOL-aware: git checks these files out as CRLF on Windows, so a multi-line mutation pattern written with LF silently failed to match and reported a false INEFFECTIVE.",
+        "Operator-approved."
       ]
     },
     {
