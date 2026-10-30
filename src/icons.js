@@ -53,6 +53,7 @@ export const ICONS = {
   importFile: '<path d="M12 13.5v-10"/><path d="M8 7.5l4-4 4 4"/><path d="M4.5 16v4h15v-4"/>',
   help: '<circle cx="12" cy="12" r="8.5"/>'
     + '<path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.7-.9 1.3v.7"/><path d="M12 17v.01"/>',
+  tunnel: '<path d="M4 16a8 6 0 0 1 16 0"/><path d="M4 16h16" stroke-dasharray="2 2"/>',
 };
 
 /** Ids the current UI must render (DESIGN §2), asserted by test/browser/ui.js. */

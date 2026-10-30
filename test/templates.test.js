@@ -67,11 +67,13 @@ function minimal(overrides = {}) {
 
 // ------------------------------------------------------------- built-ins ---
 
-test('the three built-in templates are valid and have the promised shapes', () => {
+test('the built-in templates are valid and have the promised shapes', () => {
   const builtins = builtinTemplates();
-  assert.equal(builtins.length, 3, 'DESIGN asks for three built-ins');
+  // S03.5 three originals + S05.4 three interchanges.
+  assert.equal(builtins.length, 6, 'three S03.5 originals plus three S05.4 interchanges');
   const names = builtins.map(t => t.name);
-  assert.deepEqual(names, ['T junction', 'Four-way roundabout', 'Rectangular block']);
+  assert.deepEqual(names, ['Diamond interchange', 'Dumbbell interchange', 'Directional T interchange',
+    'T junction', 'Four-way roundabout', 'Rectangular block']);
 
   for (const t of builtins) {
     assert.equal(t.kind, 'builtin');
@@ -499,8 +501,9 @@ test('a rotated template builds at the rotated geometry', () => {
   const r = h.execute(w, templateCommand(placed.template));
   assert.equal(r.ok, true, `expected success, got ${r.reason}`);
 
-  // The through road must now run along y, not x.
-  const edges = [...r.world.net.edges.values()].filter(e => e.cls === 'street');
+  // The through road must now run along y, not x. All classes count: the
+  // diamond's through road is an avenue, not a street.
+  const edges = [...r.world.net.edges.values()];
   const horizontal = edges.filter(e => Math.abs(e.pts[0][1] - e.pts[e.pts.length - 1][1]) < 1);
   const vertical = edges.filter(e => Math.abs(e.pts[0][0] - e.pts[e.pts.length - 1][0]) < 1);
   assert.ok(vertical.length >= 1, 'a 90-degree rotation must produce a vertical road');

@@ -30,7 +30,7 @@ function world({ road = [[0, 0], [600, 0]], cls = 'street' } = {}) {
 // ---------- layer declarations ----------
 
 test('every declared layer names a real simulated data source', () => {
-  assert.deepEqual(LAYER_IDS, ['traffic', 'access']);
+  assert.deepEqual(LAYER_IDS, ['traffic', 'access', 'underground']);
 
   for (const layer of LAYERS) {
     assert.ok(layer.id && layer.label, `layer ${layer.id} needs an id and a visible label`);

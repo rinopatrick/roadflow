@@ -21,6 +21,7 @@ import { profileFor as profileForEdge, roadDimensions } from './roadProfiles.js'
 import {
   validateRoadUpgrade, validateRoundaboutRadius, validateBuildingMove,
   validateProfileEdit, remapCarsForProfile, validateBridge as validateBridgeCmd,
+  validateTunnel as validateTunnelCmd,
 } from './constructionEdits.js';
 import { dist } from './core.js';
 
@@ -58,6 +59,7 @@ export const COMMAND_KIND = {
   MOVE_BUILDING: 'moveBuilding',
   APPLY_TEMPLATE: 'applyTemplate',
   BUILD_BRIDGE: 'buildBridge',
+  BUILD_TUNNEL: 'buildTunnel',
 };
 
 /** Every kind the dispatcher recognises. */
@@ -533,11 +535,17 @@ const HANDLERS = {
         if (!Number.isFinite(p?.[0]) || !Number.isFinite(p?.[1])) {
           return fail(`template segment ${i + 1} has non-finite geometry`);
         }
-        if (!world.terrain.isRoadable(p[0], p[1])) {
+        // S05: elevated segments (bridge/tunnel/ramp) may span water or
+        // rock at height; only ground segments need roadable terrain.
+        const elevated = s.grade && s.grade.kind !== 'ground';
+        if (!elevated && !world.terrain.isRoadable(p[0], p[1])) {
           return fail(`template segment ${i + 1} would cross water or rock`);
         }
       }
-      const res = world.net.addRoad(pts, cls, { pts });
+      // S05.4: oneway rides in edgeOpts (4th arg), grade in gradeOpts (5th).
+      const res = world.net.addRoad(pts, cls, { pts },
+        s.oneway ? { oneway: true } : {},
+        s.grade ? { grade: s.grade } : {});
       if (!res.edgeIds.length && !/already runs along/.test(res.reason ?? '')) {
         return fail(`template segment ${i + 1} could not be built: `
           + `${res.reason ?? 'unknown reason'}`);
@@ -600,6 +608,41 @@ const HANDLERS = {
     const allIds = [...world.net.edges.values()].map(e => e.id);
     if (!world.net.resolveCrossings(allIds.slice(-8))) {
       return fail('the bridge collides at an invalid height gap');
+    }
+    return { ok: true };
+  },
+
+  /**
+   * Builds a tunnel as ONE atomic transaction (S05.3): ground approach +
+   * portal ramp down + level bore + portal ramp up + ground approach.
+   * The bore passes beneath rock and surface roads with no junction.
+   */
+  [COMMAND_KIND.BUILD_TUNNEL](world, cmd) {
+    const { points, cls = 'street', depthZ = -12 } = cmd;
+    const check = validateTunnelCmd(world, { points, cls, depthZ });
+    if (!check.ok) return fail(check.reason);
+    const [w0, bW, bE, e0] = points;
+    const need = check.need;
+    const wLen = segLen2(w0, bW);
+    const eLen = segLen2(bE, e0);
+    const rW = lerp2(w0, bW, Math.min(need / wLen, 0.999));
+    const rE = lerp2(bE, e0, Math.min(need / eLen, 0.999));
+    const segs = [
+      { pts: [w0, rW], grade: { kind: 'ground', za: 0, zb: 0 } },
+      { pts: [rW, bW], grade: { kind: 'ramp', za: 0, zb: depthZ } },
+      { pts: [bW, bE], grade: { kind: 'tunnel', za: depthZ, zb: depthZ } },
+      { pts: [bE, rE], grade: { kind: 'ramp', za: depthZ, zb: 0 } },
+      { pts: [rE, e0], grade: { kind: 'ground', za: 0, zb: 0 } },
+    ];
+    for (const s of segs) {
+      const res = world.net.addRoad(s.pts, cls, { pts: s.pts }, {}, { grade: s.grade });
+      if (!res.edgeIds.length) {
+        return fail(`tunnel segment could not be built: ${res.reason ?? 'unknown'}`);
+      }
+    }
+    const allIds = [...world.net.edges.values()].map(e => e.id);
+    if (!world.net.resolveCrossings(allIds.slice(-8))) {
+      return fail('the tunnel collides at an invalid height gap');
     }
     return { ok: true };
   },

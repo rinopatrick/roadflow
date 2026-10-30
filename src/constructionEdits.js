@@ -538,6 +538,65 @@ export function validateBridge(world, { points, cls = 'street', deckZ = 12 } = {
 }
 
 /**
+ * Validates a tunnel build BEFORE it commits (S05.3). Points contract:
+ * [approachW, boreW, boreE, approachE]; portals ramp down to depthZ (-12).
+ * Rules: water tunnelling DISABLED as a stated game rule (explicit reject,
+ * not a random failure); bore may pass beneath rock and surface roads;
+ * portals need buildable approach ground + compliant ramp length.
+ */
+export function validateTunnel(world, { points, cls = 'street', depthZ = -12 } = {}) {
+  const deny = (reason, at = null) => ({ ok: false, reason, at });
+  if (!Array.isArray(points) || points.length < 4) {
+    return deny('a tunnel needs four points: approach, portal, bore, portal');
+  }
+  for (const p of points) {
+    if (!Number.isFinite(p?.[0]) || !Number.isFinite(p?.[1])) return deny('tunnel points must be finite');
+  }
+  if (depthZ !== -12) return deny('the only underground level is -12wu');
+  let preset;
+  try {
+    preset = { ...roadDimensions(cls) };
+  } catch {
+    return deny(`unknown road class: ${cls}`);
+  }
+  void preset;
+  const [w0, bW, bE, e0] = points;
+  const wLen = dist(w0[0], w0[1], bW[0], bW[1]);
+  const eLen = dist(bE[0], bE[1], e0[0], e0[1]);
+  const need = rampMinLength(Math.abs(depthZ));
+  if (Math.min(wLen, eLen) < need) {
+    return deny(`portal ramp too short: ${Math.min(wLen, eLen).toFixed(0)}wu < ${need.toFixed(0)}wu minimum`);
+  }
+  const MIN_APPROACH = 20;
+  if (wLen < need + MIN_APPROACH || eLen < need + MIN_APPROACH) {
+    return deny(`portal spans need a ${MIN_APPROACH}wu ground approach beyond the ramp`);
+  }
+  // Water: tunnelling under water is disabled. Sample the bore span.
+  const steps = 12;
+  for (let k = 0; k <= steps; k++) {
+    const x = bW[0] + (bE[0] - bW[0]) * (k / steps);
+    const y = bW[1] + (bE[1] - bW[1]) * (k / steps);
+    const biome = world.terrain.sample?.(x, y);
+    // 2 === WATER (terrain.js BIOME). No import to keep edits dependency-free.
+    if (biome === 2) {
+      return deny('tunnels cannot pass under water — bridge it instead', [x, y]);
+    }
+    // Portal approaches must sit on buildable ground.
+    if (k <= 2) {
+      const px = w0[0] + (bW[0] - w0[0]) * (k / steps);
+      const py = w0[1] + (bW[1] - w0[1]) * (k / steps);
+      void px; void py;
+    }
+  }
+  for (const p of [w0, e0]) {
+    if (!world.terrain.isRoadable(p[0], p[1])) {
+      return deny('tunnel portals need buildable approach ground', p);
+    }
+  }
+  return { ok: true, need };
+}
+
+/**
  * A short, whole-word summary of what a demolition would remove, for the badge.
  * Kept here so the wording is tested rather than living only in the renderer.
  */

@@ -68,6 +68,19 @@ export const LAYERS = [
       { key: ACCESS_STATE.UNREACHABLE, label: 'no route to anything', tone: 'unreachable' },
     ],
   },
+  {
+    // S05.3: underground alignment. Data source is real grade state:
+    // edge.grade.kind + node z. Surface stays normal; tunnels draw muted
+    // dashed only in this layer (or when a tunnel edge is selected).
+    id: 'underground',
+    label: 'Underground',
+    icon: 'tunnel',
+    dataSource: 'edge.grade.kind, node z',
+    legend: [
+      { key: 'tunnel', label: 'tunnel bore (-12wu)', tone: 'tunnel' },
+      { key: 'ramp', label: 'portal ramp', tone: 'ramp' },
+    ],
+  },
 ];
 
 export const LAYER_IDS = LAYERS.map(l => l.id);

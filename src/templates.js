@@ -42,8 +42,10 @@ const TEMPLATE_FIELDS = new Set([
   'schema', 'version', 'name', 'kind', 'segments', 'roundabouts', 'bbox', 'meta',
 ]);
 
-/** Fields a segment may carry. */
-const SEGMENT_FIELDS = new Set(['from', 'to', 'cls']);
+/** Fields a segment may carry. S05.4: grade/oneway extend segments to carry
+ * interchange geometry — still data, validated against closed enums. */
+const SEGMENT_FIELDS = new Set(['from', 'to', 'cls', 'grade', 'oneway']);
+const GRADE_KINDS = new Set(['ground', 'bridge', 'ramp', 'tunnel']);
 
 /** Fields a roundabout may carry. */
 const ROUNDABOUT_FIELDS = new Set(['at', 'radius']);
@@ -124,7 +126,26 @@ export function validateTemplate(raw) {
     if (dist(s.from[0], s.from[1], s.to[0], s.to[1]) < 1) {
       return fail(`segment ${i + 1} has zero length`);
     }
-    segments.push({ from: [s.from[0], s.from[1]], to: [s.to[0], s.to[1]], cls });
+    const seg = { from: [s.from[0], s.from[1]], to: [s.to[0], s.to[1]], cls };
+    if (s.oneway !== undefined) {
+      if (typeof s.oneway !== 'boolean') return fail(`segment ${i + 1} oneway must be boolean`);
+      seg.oneway = s.oneway;
+    }
+    if (s.grade !== undefined) {
+      const g = s.grade;
+      if (g === null || typeof g !== 'object' || Array.isArray(g)) {
+        return fail(`segment ${i + 1} grade must be an object`);
+      }
+      for (const key of Object.keys(g)) {
+        if (!['kind', 'za', 'zb'].includes(key)) return fail(`segment ${i + 1} grade has unknown field: ${key}`);
+      }
+      if (!GRADE_KINDS.has(g.kind)) return fail(`segment ${i + 1} grade kind must be ground|bridge|ramp|tunnel`);
+      if (!Number.isFinite(g.za) || !Number.isFinite(g.zb)) {
+        return fail(`segment ${i + 1} grade za/zb must be finite`);
+      }
+      seg.grade = { kind: g.kind, za: g.za, zb: g.zb };
+    }
+    segments.push(seg);
   }
 
   const roundabouts = [];
@@ -218,6 +239,9 @@ export function transformTemplate(template, placement = {}) {
     from: place(s.from),
     to: place(s.to),
     cls: s.cls,
+    // S05.4: rotation/translation are planar; grade heights are invariant.
+    ...(s.oneway !== undefined ? { oneway: s.oneway } : {}),
+    ...(s.grade ? { grade: { ...s.grade } } : {}),
   }));
   const roundabouts = (template.roundabouts ?? []).map(r => ({
     at: place(r.at),
@@ -244,6 +268,100 @@ export function transformTemplate(template, placement = {}) {
  * a block is a closed loop.
  */
 export const BUILTIN_TEMPLATES = [
+  {
+    schema: TEMPLATE_SCHEMA,
+    version: TEMPLATE_VERSION,
+    name: 'Diamond interchange',
+    kind: 'builtin',
+    // Highway east-west at ground, cross road north-south on a bridge deck
+    // (z=12). Four one-way ramps link them END-TO-END: every ramp endpoint
+    // lands exactly on the highway or the deck (shared node), so the ramps
+    // connect rather than dangle. Ramp runs are ~295wu; the 12wu climb stays
+    // within slope 0.15.
+    segments: [
+      { from: [-420, 0], to: [420, 0], cls: 'avenue' },
+      {
+        from: [0, -320], to: [0, 320], cls: 'street',
+        grade: { kind: 'bridge', za: 12, zb: 12 },
+      },
+      {
+        from: [-260, 0], to: [0, -140], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 0, zb: 12 },
+      },
+      {
+        from: [0, -140], to: [260, 0], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 12, zb: 0 },
+      },
+      {
+        from: [260, 0], to: [0, 140], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 0, zb: 12 },
+      },
+      {
+        from: [0, 140], to: [-260, 0], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 12, zb: 0 },
+      },
+    ],
+    roundabouts: [],
+  },
+  {
+    schema: TEMPLATE_SCHEMA,
+    version: TEMPLATE_VERSION,
+    name: 'Dumbbell interchange',
+    kind: 'builtin',
+    // Two ground roundabouts (one each side) joining the highway to four
+    // one-way ramps; the cross road rides a bridge deck (z=12) over the
+    // highway with no junction. Roundabout markers sit on the ground
+    // highway×ramp junctions — never on the deck.
+    segments: [
+      { from: [-420, 0], to: [420, 0], cls: 'avenue' },
+      {
+        from: [0, -320], to: [0, 320], cls: 'street',
+        grade: { kind: 'bridge', za: 12, zb: 12 },
+      },
+      {
+        from: [-260, 0], to: [0, -140], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 0, zb: 12 },
+      },
+      {
+        from: [0, -140], to: [260, 0], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 12, zb: 0 },
+      },
+      {
+        from: [260, 0], to: [0, 140], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 0, zb: 12 },
+      },
+      {
+        from: [0, 140], to: [-260, 0], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 12, zb: 0 },
+      },
+    ],
+    roundabouts: [{ at: [-260, 0], radius: 36 }, { at: [260, 0], radius: 36 }],
+  },
+  {
+    schema: TEMPLATE_SCHEMA,
+    version: TEMPLATE_VERSION,
+    name: 'Directional T interchange',
+    kind: 'builtin',
+    // Highway east-west at ground; north arm rises on a bridge. Two one-way
+    // directional ramps meet the deck end-to-end (shared nodes, no stubs).
+    // Centred near the origin (bbox centre within 60wu) like every builtin.
+    segments: [
+      { from: [-420, 160], to: [420, 160], cls: 'avenue' },
+      {
+        from: [0, 160], to: [0, -160], cls: 'avenue',
+        grade: { kind: 'bridge', za: 12, zb: 12 },
+      },
+      {
+        from: [-260, 160], to: [0, 0], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 0, zb: 12 },
+      },
+      {
+        from: [0, 0], to: [260, 160], cls: 'street', oneway: true,
+        grade: { kind: 'ramp', za: 12, zb: 0 },
+      },
+    ],
+    roundabouts: [],
+  },
   {
     schema: TEMPLATE_SCHEMA,
     version: TEMPLATE_VERSION,
@@ -308,6 +426,8 @@ export function templateCommand(placedTemplate, { cls } = {}) {
       from: s.from,
       to: s.to,
       cls: cls ?? s.cls,
+      ...(s.oneway !== undefined ? { oneway: s.oneway } : {}),
+      ...(s.grade ? { grade: s.grade } : {}),
     })),
     roundabouts: placedTemplate.roundabouts ?? [],
   };

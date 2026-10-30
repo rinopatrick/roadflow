@@ -305,21 +305,23 @@ export class Renderer {
     // buildings
     for (const b of eco.buildings.values()) this._drawBuilding(ctx, b, net, zoom);
 
-    // S05.2: cars draw in grade order — ground cars before decks would be
-    // wrong; ground cars, then decks' shadows above, then elevated cars.
-    // (Deck shadows were drawn in the road pass; cars follow the same order.)
+    // S05.2 cars in grade order; S05.3 tunnel cars hidden unless the
+    // underground layer is on or a tunnel edge is selected. Surface roads
+    // always draw normally — the tunnel is beneath, not instead of, them.
+    const showTunnel = state.overlay === 'underground'
+      || (state.selected?.kind === 'edge' && net.edges.get(state.selected.id)?.grade?.kind === 'tunnel');
     if (traffic) {
       for (const car of traffic.cars.values()) {
         const st = car.currentStep?.();
         const edge = st ? net.edges.get(st.edgeId) : null;
-        if (!edge || (edge.grade?.kind ?? 'ground') === 'ground') this._drawCar(ctx, car, zoom);
-      }
-      for (const car of traffic.cars.values()) {
-        const st = car.currentStep?.();
-        const edge = st ? net.edges.get(st.edgeId) : null;
-        if (edge && (edge.grade?.kind ?? 'ground') !== 'ground') this._drawCar(ctx, car, zoom);
+        const kind = edge?.grade?.kind ?? 'ground';
+        if (kind === 'ground') this._drawCar(ctx, car, zoom);
+        else if (kind !== 'tunnel') this._drawCar(ctx, car, zoom, { elevated: true });
+        else if (showTunnel) this._drawCar(ctx, car, zoom, { ghost: true });
       }
     }
+    // S05.3 portal markers + muted dashed bore alignment.
+    if (showTunnel) this._drawTunnelOverlay(ctx, net, traffic, zoom);
 
     // Analytic overlays. Exactly one can be active (DESIGN section 1), and the
     // id comes from the controller rather than from a flag on the renderer, so
@@ -607,6 +609,42 @@ export class Renderer {
         ctx.fill();
       }
     }
+  }
+
+  /**
+   * S05.3 underground overlay: portal markers (ramp endpoints at grade
+   * transitions) + muted dashed bore alignment. Surface roads are untouched;
+   * tunnel cars draw as ghosts only through the caller's showTunnel gate.
+   */
+  _drawTunnelOverlay(ctx, net, traffic, zoom) {
+    ctx.save();
+    // Bore alignment: muted dashed line along every tunnel edge.
+    ctx.setLineDash([6 * zoom, 5 * zoom]);
+    for (const edge of net.edges.values()) {
+      if ((edge.grade?.kind ?? 'ground') !== 'tunnel') continue;
+      const pts = edge.pts;
+      if (!pts || pts.length < 2) continue;
+      this._pathPolyline(ctx, pts, zoom);
+      ctx.lineWidth = Math.max(3 * zoom, 2);
+      ctx.strokeStyle = 'rgba(120, 130, 150, 0.75)';
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // Portal markers: ramp endpoints where grade meets ground/tunnel.
+    for (const edge of net.edges.values()) {
+      if ((edge.grade?.kind ?? 'ground') !== 'ramp') continue;
+      for (const end of [edge.pts[0], edge.pts[edge.pts.length - 1]]) {
+        const [x, y] = this.worldToScreen(end[0], end[1]);
+        ctx.beginPath();
+        ctx.arc(x, y, 6 * zoom, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(60, 65, 75, 0.9)';
+        ctx.fill();
+        ctx.lineWidth = 2 * zoom;
+        ctx.strokeStyle = 'rgba(230, 235, 245, 0.9)';
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   _drawNode(ctx, node, zoom, state) {
@@ -1001,16 +1039,23 @@ export class Renderer {
     ctx.closePath();
   }
 
-  _drawCar(ctx, car, zoom) {
+  _drawCar(ctx, car, zoom, style = {}) {
     const [x, y] = this.worldToScreen(car.x, car.y);
+    // S05.3 ghost: underground cars in the overlay draw translucent so the
+    // surface context stays readable. Elevated cars draw with a longer
+    // shadow cast toward the ground.
+    const shadowScale = style.elevated ? 0.9 : 0.37;
     const L = 7 * zoom, W = 3.6 * zoom;
     const dark = 'rgba(0,0,0,0.55)';
     ctx.save();
+    if (style.ghost) ctx.globalAlpha = 0.45;
     ctx.translate(x, y);
     ctx.rotate(car.dir);
     // Drop shadow, in the same fixed screen direction as every other object.
     // Scaled down because a car is low: physical height scales the shadow.
-    const cShadow = offsetInRotatedFrame(car.dir, ...shadowOffset(0.37));
+    // Ghost cars skip their shadow: they are beneath the surface.
+    const cShadow = style.ghost ? [0, 0]
+      : offsetInRotatedFrame(car.dir, ...shadowOffset(shadowScale));
     ctx.fillStyle = 'rgba(0,0,0,0.16)';
     this._roundRect(ctx, -L / 2 + cShadow[0], -W / 2 + cShadow[1], L, W, 1.2 * zoom);
     ctx.fill();

@@ -228,12 +228,22 @@ export class RoadNetwork {
     const candidates = [];
     for (let i = 0; i < n; i++) candidates.push(i);
 
+    // S05: snap with the endpoint elevation. A 2-point graded segment pins
+    // station 0 to grade.za and station 1 to grade.zb, so a ramp end lands on
+    // its deck node instead of dangling beside it. Without this, the default
+    // z=0 snap refuses elevated nodes and every interchange ramp stubs out.
+    const segGrade = gradeOpts?.grade ?? null;
+    const stationZ = (i) => {
+      if (!segGrade) return 0;
+      if (n === 2) return i === 0 ? segGrade.za : segGrade.zb;
+      return i === 0 ? segGrade.za : i === n - 1 ? segGrade.zb : null;
+    };
     const stations = candidates.map((i) => {
       const at = pointAt(pts, cum, ctrlArc[i]);
       return {
         s: ctrlArc[i],
         at: [at.x, at.y],
-        snap: this._snapPoint(controls[i][0], controls[i][1]),
+        snap: this._snapPoint(controls[i][0], controls[i][1], stationZ(i)),
         node: null,
       };
     });
@@ -453,6 +463,11 @@ export class RoadNetwork {
 
     const { cum, total } = polylineLengths(clean);
     const id = this._newId('e');
+    // S05: endpoint elevations follow the explicit grade. Shared nodes stay
+    // consistent because valid constructions agree (ramp zb == deck za).
+    const gFinal = gradeArg.grade ?? inferGrade(a, b);
+    a.z = gFinal.za;
+    b.z = gFinal.zb;
     const edge = {
       id, a: aId, b: bId, cls,
       ...(edgeOpts.profile ? { profile: { ...edgeOpts.profile } } : {}),
@@ -647,17 +662,23 @@ export class RoadNetwork {
       const e = this.edges.get(eid);
       if (!e) continue;
       const fromA = e.a === center.id;
-      // arc length (from the center side) where distance from center >= R
+      // Arc length (from the center side) where distance from center == R,
+      // interpolated between samples. Using the first sample BEYOND R would
+      // split at the far endpoint for 2-point authored edges (the sample IS
+      // the end), stranding a sliver and breaking later roundabouts.
       let s = 0;
-      if (fromA) {
-        for (let k = 0; k < e.cum.length; k++) {
-          const p = e.pts[k];
-          if (dist(p[0], p[1], center.x, center.y) >= R) { s = e.cum[k]; break; }
-        }
-      } else {
-        for (let k = e.cum.length - 1; k >= 0; k--) {
-          const p = e.pts[k];
-          if (dist(p[0], p[1], center.x, center.y) >= R) { s = e.total - e.cum[k]; break; }
+      const distAt = (k) => dist(e.pts[k][0], e.pts[k][1], center.x, center.y);
+      const order = fromA
+        ? [...Array(e.cum.length).keys()]
+        : [...Array(e.cum.length).keys()].reverse();
+      for (let i = 1; i < order.length; i++) {
+        const k0 = order[i - 1], k1 = order[i];
+        const d0 = distAt(k0), d1 = distAt(k1);
+        if ((d0 < R && d1 >= R) || (d0 >= R && d1 < R)) {
+          const t = (R - d0) / ((d1 - d0) || 1);
+          const arc = e.cum[k0] + (e.cum[k1] - e.cum[k0]) * Math.max(0, Math.min(1, t));
+          s = fromA ? arc : e.total - arc;
+          break;
         }
       }
       s = Math.max(6, Math.min(s, e.total - 6));
