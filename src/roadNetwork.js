@@ -974,7 +974,7 @@ export class RoadNetwork {
   // resampling from controls.
   toJSON() {
     return {
-      nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, buildingIds: n.buildingIds || [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
+      nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, ...(n.signalProgram ? { signalProgram: n.signalProgram } : {}), buildingIds: n.buildingIds || [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
       edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: e.profile } : {}), controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
     };
   }
@@ -984,7 +984,7 @@ export class RoadNetwork {
     for (const n of data.nodes) {
       // Reserve loaded IDs so a later allocation cannot collide with them.
       net.ids?.reserve(n.id);
-      const node = { id: n.id, x: n.x, y: n.y, type: n.type, edges: new Set(), light: n.light, buildingIds: Array.isArray(n.buildingIds) ? [...n.buildingIds] : [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
+      const node = { id: n.id, x: n.x, y: n.y, type: n.type, edges: new Set(), light: n.light, signalProgram: n.signalProgram ? JSON.parse(JSON.stringify(n.signalProgram)) : undefined, buildingIds: Array.isArray(n.buildingIds) ? [...n.buildingIds] : [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
       net.nodes.set(node.id, node);
     }
     for (const e of data.edges) {

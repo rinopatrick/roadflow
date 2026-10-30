@@ -5,7 +5,7 @@ import { canChangeLane, planExitLane, changeProgress, LANE_CHANGE, VEHICLE_LENGT
 import { pointAt, clamp, dist, makeRng } from './core.js';
 import { findPath, findVehicleRoute, pathToSteps } from './pathfinding.js';
 import { buildJunctionConnectors } from './junctions.js';
-import { phaseForAxis } from './signals.js';
+import { phaseForAxis, getSignalState } from './signals.js';
 
 /**
  * Time constant of the per-edge congestion EMA, in simulation seconds.
@@ -509,6 +509,21 @@ export class TrafficSim {
     }
 
     if (node.type === 'light') {
+      // Movement-based program wins when installed; legacy axis otherwise.
+      // Renderer calls the same function, so the map cannot disagree.
+      if (node.signalProgram) {
+        const cid = car.currentStep()?.connectorId;
+        const st = getSignalState(node.signalProgram, this.time);
+        if (cid && st.allowedConnectorIds.includes(cid)) return null;
+        // Committed car clears on yellow: a reservation holder keeps going.
+        if (st.state === 'yellow' && (car._heldConnector || distToEnd <= 10)) return null;
+        if (st.state === 'yellow' && distToEnd > 10) {
+          this.waitReason.set(car.id, 'signal');
+          return Math.min(distToEnd, 6);
+        }
+        this.waitReason.set(car.id, 'signal');
+        return Math.min(distToEnd, 6);
+      }
       // Shared phase authority (signals.js). The renderer calls the same
       // function, so the indicator on the map cannot disagree with this.
       this._lightAxisGreen(node); // resolve axis A once, before first use

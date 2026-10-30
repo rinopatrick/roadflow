@@ -22,6 +22,8 @@ import {
   validateRoadUpgrade, validateRoundaboutRadius, validateBuildingMove,
   validateProfileEdit, remapCarsForProfile,
 } from './constructionEdits.js';
+import { buildJunctionConnectors as buildJunctionConnectorsFor } from './junctions.js';
+import { validateProgram as validateSignalProgram } from './signals.js';
 
 /**
  * The command kinds S03.1 owns: the actions that already exist.
@@ -39,6 +41,7 @@ export const COMMAND_KIND = {
   MAKE_ROUNDABOUT: 'makeRoundabout',
   REMOVE_ROUNDABOUT: 'removeRoundabout',
   SET_SIGNAL: 'setSignal',
+  SET_SIGNAL_PROGRAM: 'setSignalProgram',
   ADD_GRID: 'addGrid',
   UPGRADE_ROAD: 'upgradeRoad',
   EDIT_PROFILE: 'editProfile',
@@ -579,6 +582,31 @@ const HANDLERS = {
 
     n.type = 'light';
     n.light = { cycle, greenRatio, offset };
+    return { ok: true };
+  },
+
+  /**
+   * Installs a movement-based signal program (S04.4). Validated live with
+   * connector conflicts; an invalid program never installs. One command =
+   * one undo entry. Starvation-checked against the junction's movements.
+   */
+  [COMMAND_KIND.SET_SIGNAL_PROGRAM](world, cmd) {
+    const n = world.net.nodes.get(cmd.nodeId);
+    if (!n) return fail(`no junction with id ${cmd.nodeId}`);
+    if (n.isRing) return fail('a roundabout has no signal');
+    if (n.edges.size < 2) return fail('a signal needs at least two road connections');
+    const program = cmd.program;
+    if (!program || !Array.isArray(program.phases) || !program.phases.length) {
+      return fail('a program needs at least one phase');
+    }
+    const conns = buildJunctionConnectorsFor(world.net, n.id);
+    const conflicts = new Map(conns.map(k => [k.id, k.conflicts]));
+    const all = conns.map(k => k.id);
+    const check = validateSignalProgram(program, conflicts, all);
+    if (!check.ok) return fail(check.reason);
+    n.type = 'light';
+    n.signalProgram = JSON.parse(JSON.stringify(program));
+    world.net.version++;
     return { ok: true };
   },
 };
