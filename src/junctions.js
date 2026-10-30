@@ -8,7 +8,9 @@
 // vehicle half-width margin; opposing non-crossing right turns may coexist.
 import { laneCenterOffset } from './roadProfiles.js';
 import { profileFor, lanesAvailable } from './roadProfiles.js';
+import { JUNCTION_Z_TOL, gradeHeightAt } from './grades.js';
 import { pointAt } from './core.js';
+const JUNCTION_Z_TOL_GRADE = JUNCTION_Z_TOL;
 
 export const VEHICLE_HALF_WIDTH = 1.8;
 const CONFLICT_MARGIN = 0.5;
@@ -105,6 +107,14 @@ export function buildJunctionConnectors(net, nodeId, options = {}) {
       // Non-ring to non-ring at a ring node: arms never connect directly;
       // they must travel via the ring. Ring-to-ring is circulation.
       if (!fromRing && !toRing && node.isRing) continue;
+      // S05.1: connectors only within equal height. Heights are measured at
+      // the NODE end: entry arrives AT the node (t=1 side), exit leaves FROM
+      // the node (t=0 side). A ground entry never connects to a bridge exit.
+      const toT = nodeId === exit.edge.a ? 0 : 1;
+      const fromT = nodeId === from.edge.a ? 0 : 1;
+      const fromZn = from.edge.grade ? gradeHeightAt(from.edge.grade, fromT) : 0;
+      const toZ = exit.edge.grade ? gradeHeightAt(exit.edge.grade, toT) : 0;
+      if (Math.abs(fromZn - toZ) > JUNCTION_Z_TOL_GRADE) continue;
       const outTan = exitTangent(exit.edge, nodeId);
       const turn = turnType(inTan, outTan);
       if (turn === 'uturn' && !fromRing && !toRing) continue;

@@ -28,8 +28,8 @@ import { Economy } from './economy.js';
 import { TrafficSim, Car, getCarIdCounter, setCarIdCounter } from './traffic.js';
 import { createIdSource, makeRng } from './core.js';
 
-/** Current snapshot schema version. v3 adds per-edge profiles (S04.1). */
-export const SNAPSHOT_VERSION = 3;
+/** Current snapshot schema version. v4 adds node z + edge grade (S05.1). */
+export const SNAPSHOT_VERSION = 4;
 
 /** Oldest version this build can migrate from. */
 export const MIN_SUPPORTED_VERSION = 1;
@@ -265,8 +265,15 @@ function normalise(data, version, seed, warnings) {
   // v3 migration: edges gain a profile. v1/v2 saves carry cls (+ring/oneway)
   // only; the profile is derived deterministically so old cities load with
   // unchanged topology and widths. Unknown legacy classes fall back to street.
-  const net = { nodes: data.net.nodes, edges: data.net.edges.map(migrateEdgeV3) };
+  // v4 migration: nodes gain z (default 0), edges gain grade (default
+  // ground). All older saves are flat, so topology and widths are unchanged.
+  const nodeZ = new Map(data.net.nodes.map((n) => [n.id, Number.isFinite(n.z) ? n.z : 0]));
+  const net = {
+    nodes: data.net.nodes.map((n) => ({ ...n, z: Number.isFinite(n.z) ? n.z : 0 })),
+    edges: data.net.edges.map((e) => migrateEdgeV3(e, nodeZ)),
+  };
   if (version < 3) warnings.push('migrated road profiles to v3');
+  if (version < 4) warnings.push('migrated grades to v4 (all ground)');
   const out = {
     v: SNAPSHOT_VERSION,
     savedAt: data.savedAt ?? Date.now(),
@@ -308,8 +315,15 @@ function normalise(data, version, seed, warnings) {
  * from cls + ring/oneway flags. Edges that already carry a profile keep it;
  * motorway edges with legacy driveways keep access with a warning upstream.
  */
-function migrateEdgeV3(e) {
-  if (e.profile) return { ...e, profile: { ...e.profile } };
+function migrateEdgeV3(e, nodeZ = null) {
+  // v4 grade alongside the v3 profile: explicit grade wins, otherwise infer
+  // from endpoint z (flat legacy data infers ground).
+  const za = nodeZ?.get(e.a) ?? 0;
+  const zb = nodeZ?.get(e.b) ?? 0;
+  const grade = e.grade ? { ...e.grade }
+    : za === 0 && zb === 0 ? { kind: 'ground', za: 0, zb: 0 }
+    : za === zb ? { kind: za > 0 ? 'bridge' : 'tunnel', za, zb }
+    : { kind: 'ramp', za, zb };
   const cls = ['street', 'avenue', 'highway'].includes(e.cls) ? e.cls : 'street';
   const PRESETS = {
     street: { forward: 1, backward: 1, laneWidth: 6.5, medianWidth: 1.2, shoulderWidth: 1, speed: 14, access: 'local' },
@@ -318,12 +332,14 @@ function migrateEdgeV3(e) {
   };
   const preset = PRESETS[cls];
   const oneWay = !!(e.oneway || e.ring);
+  if (e.profile) return { ...e, cls, profile: { ...e.profile }, grade };
   return {
     ...e,
     cls,
     profile: oneWay
       ? { ...preset, forward: Math.max(preset.forward, 1), backward: 0, medianWidth: 0 }
       : { ...preset },
+    grade,
   };
 }
 

@@ -10,6 +10,18 @@
 // to existing nodes and can split existing edges, producing real junctions.
 import { dist, splinePoints, polylineLengths, projectOnPolyline, pointAt, uid } from './core.js';
 import { roadDimensions, laneCenterOffset, outerLaneOffset } from './roadProfiles.js';
+import { JUNCTION_Z_TOL, MIN_CLEARANCE, gradeHeightAt } from './grades.js';
+const JUNCTION_Z_TOL_GRADE = JUNCTION_Z_TOL;
+const MIN_CLEARANCE_GRADE = MIN_CLEARANCE;
+
+/** Grade inferred from endpoint elevations (S05.1). */
+function inferGrade(aNode, bNode) {
+  const za = aNode?.z ?? 0;
+  const zb = bNode?.z ?? 0;
+  if (za === 0 && zb === 0) return { kind: 'ground', za: 0, zb: 0 };
+  if (za === zb) return { kind: za > 0 ? 'bridge' : 'tunnel', za, zb };
+  return { kind: 'ramp', za, zb };
+}
 
 // `width` and `lanesPerDir` are kept for backwards compatibility with existing
 // callers and tests, but they are DERIVED from roadProfiles so there is only
@@ -164,7 +176,7 @@ export class RoadNetwork {
    *   CONTRACTS section 4 reserves for S03.2; omitting it keeps the old
    *   behaviour of splining the controls.
    */
-  addRoad(controls, cls = 'street', options = {}, edgeOpts = {}) {
+  addRoad(controls, cls = 'street', options = {}, edgeOpts = {}, gradeOpts = {}) {
     const created = { nodeIds: [], edgeIds: [], reason: null };
     const versionBefore = this.version;
 
@@ -255,7 +267,11 @@ export class RoadNetwork {
       // grid was committed twice. Skip a slice that is already paved.
       if (this._sliceCovered(slice)) { skipped++; continue; }
 
-      const edge = this._makeEdgeFromPts(A.node.id, B.node.id, cls, slice, edgeOpts);
+      // S05.1: grade from za/zb (or node z). Endpoints must match; ramps
+      // interpolate; bridge/tunnel decks stay level (validated in command).
+      const grade = gradeOpts.grade ?? inferGrade(A.node, B.node);
+      const edge = this._makeEdgeFromPts(A.node.id, B.node.id, cls, slice, edgeOpts, { grade });
+      if (!edge) continue;
       created.edgeIds.push(edge.id);
     }
 
@@ -347,6 +363,17 @@ export class RoadNetwork {
           const x = this._crossPoint(a, b);
           if (!x) continue;
 
+          // S05.1: grade-aware crossings. Same height joins; separated
+          // grades pass over/under; the 0.5..8wu gap is an invalid
+          // collision (edge z at the crossing, not just endpoints).
+          const za = this._heightAt(a, x.s1);
+          const zb = this._heightAt(b, x.s2);
+          const gap = Math.abs(za - zb);
+          if (gap > JUNCTION_Z_TOL_GRADE) {
+            if (gap < MIN_CLEARANCE_GRADE) return false; // invalid: reject transaction
+            continue; // grade-separated: no junction
+          }
+
           const n1 = this.splitEdge(aId, x.s1);
           const n2 = this.splitEdge(bId, x.s2);
           splits += 2;
@@ -363,6 +390,13 @@ export class RoadNetwork {
       }
     }
     return true;
+  }
+
+  /** Height of an edge at arc s (grade-aware, S05.1). */
+  _heightAt(edge, s) {
+    const grade = edge.grade ?? { kind: 'ground', za: 0, zb: 0 };
+    const t = edge.total > 0 ? s / edge.total : 0;
+    return gradeHeightAt(grade, t);
   }
 
   // First intersection between two edge polylines. Returns {s1, s2} arc lengths.
@@ -405,7 +439,7 @@ export class RoadNetwork {
    * sampled `pts` is what the simulation and renderer use, and it is serialized
    * so a reload reproduces the exact same shape.
    */
-  _makeEdgeFromPts(aId, bId, cls, pts, edgeOpts = {}) {
+  _makeEdgeFromPts(aId, bId, cls, pts, edgeOpts = {}, gradeArg = {}) {
     const a = this.nodes.get(aId), b = this.nodes.get(bId);
     if (!a || !b) return null;
 
@@ -425,6 +459,7 @@ export class RoadNetwork {
       ...(edgeOpts.oneway ? { oneway: true } : {}),
       controls: this._decimateForControls(clean, cum),
       pts: clean,
+      grade: gradeArg.grade ?? inferGrade(a, b),
       cum,
       total,
       // Each sample is its own segment for a directly-built polyline.
@@ -454,14 +489,15 @@ export class RoadNetwork {
     return out;
   }
 
-  _makeNode(x, y, type = 'plain') {
+  _makeNode(x, y, type = 'plain', z = 0) {
     const id = this._newId('n');
     // `buildingIds` is the authority for access-node ownership. It is a LIST
     // because two buildings on opposite sides of a road legitimately share one
     // access node, and a single field let them overwrite each other (EVIDENCE
     // E15). `drivewayFor` is kept in sync for legacy reads and v1 serialization
     // but must never gate access.
-    const node = { id, x, y, type, edges: new Set(), light: null, buildingIds: [], drivewayFor: null };
+    // S05.1: explicit elevation in wu, default 0 (ground).
+    const node = { id, x, y, z: Number.isFinite(z) ? z : 0, type, edges: new Set(), light: null, buildingIds: [], drivewayFor: null };
     if (type === 'light') node.light = { cycle: 14, offset: 0, greenRatio: 0.42 };
     this.nodes.set(id, node);
     return node;
@@ -521,12 +557,24 @@ export class RoadNetwork {
     const aId = edge.a;
     const bId = edge.b;
     const cls = edge.cls;
+    // S05.1: split preserves height at the split point. The grade geometry
+    // follows the ORIGINAL arc: child A spans [0,s], child B spans [s,total].
+    const grade = edge.grade ?? { kind: 'ground', za: 0, zb: 0 };
+    const tSplit = edge.total > 0 ? s / edge.total : 0;
+    const zSplit = gradeHeightAt(grade, tSplit);
+    node.z = zSplit;
+    const gradeA = grade.kind === 'ramp'
+      ? { kind: 'ramp', za: grade.za, zb: zSplit }
+      : { ...grade };
+    const gradeB = grade.kind === 'ramp'
+      ? { kind: 'ramp', za: zSplit, zb: grade.zb }
+      : { ...grade };
     const meta = { oneway: !!edge.oneway, ring: !!edge.ring, profile: edge.profile ? { ...edge.profile } : null };
     const carried = [...edge.driveways];
 
     this.removeEdge(edgeId, true); // keep the endpoint nodes
-    const eA = this._makeEdgeFromPts(aId, node.id, cls, ptsA, meta.profile ? { profile: meta.profile, oneway: meta.oneway } : {});
-    const eB = this._makeEdgeFromPts(node.id, bId, cls, ptsB, meta.profile ? { profile: meta.profile, oneway: meta.oneway } : {});
+    const eA = this._makeEdgeFromPts(aId, node.id, cls, ptsA, meta.profile ? { profile: meta.profile, oneway: meta.oneway } : {}, { grade: gradeA });
+    const eB = this._makeEdgeFromPts(node.id, bId, cls, ptsB, meta.profile ? { profile: meta.profile, oneway: meta.oneway } : {}, { grade: gradeB });
 
     for (const child of [eA, eB]) {
       if (!child) continue;
@@ -798,21 +846,34 @@ export class RoadNetwork {
   }
 
   _snapNodeWithin(x, y, radius) {
+    return this._snapNodeWithinZ(x, y, radius, null);
+  }
+
+  /** Z-filtered node snap: null accepts any level (legacy). */
+  _snapNodeWithinZ(x, y, radius, z) {
     let best = null, bd = radius;
     for (const n of this.nodes.values()) {
+      if (z !== null && z !== undefined && Math.abs((n.z ?? 0) - z) > JUNCTION_Z_TOL_GRADE) continue;
       const d = dist(x, y, n.x, n.y);
       if (d < bd) { bd = d; best = n; }
     }
     return best;
   }
 
-  // Returns {kind:'node', id} | {kind:'edgeSplit', edgeId, s} | null
-  _snapPoint(x, y) {
-    const n = this._snapNode(x, y);
+  // Returns {kind:'node', id} | {kind:'edgeSplit', edgeId, s} | null.
+  // S05.1: snap filters by compatible z. `z` is the pointer's active layer
+  // (default 0 = ground); a ground pointer beneath a bridge never snaps to
+  // its elevated node. Pass z=null to accept any level (legacy callers).
+  _snapPoint(x, y, z = 0) {
+    const n = this._snapNodeWithinZ(x, y, NODE_SNAP, z);
     if (n) return { kind: 'node', id: n.id };
     let best = null, bd = EDGE_SNAP;
     for (const e of this.edges.values()) {
       if (e.ring) continue; // never split the circulating lane of a roundabout
+      if (z !== null && z !== undefined) {
+        const { s: ps } = projectOnPolyline(e.pts, e.cum, x, y);
+        if (Math.abs(this._heightAt(e, ps) - z) > JUNCTION_Z_TOL_GRADE) continue;
+      }
       const { s, d } = projectOnPolyline(e.pts, e.cum, x, y);
       if (d < bd) { bd = d; best = { kind: 'edgeSplit', edgeId: e.id, s }; }
     }
@@ -1020,8 +1081,8 @@ export class RoadNetwork {
   // resampling from controls.
   toJSON() {
     return {
-      nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, ...(n.signalProgram ? { signalProgram: n.signalProgram } : {}), buildingIds: n.buildingIds || [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
-      edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: e.profile } : {}), controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
+      nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, z: n.z ?? 0, type: n.type, light: n.light, ...(n.signalProgram ? { signalProgram: n.signalProgram } : {}), buildingIds: n.buildingIds || [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
+      edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: e.profile } : {}), grade: e.grade ?? { kind: 'ground', za: 0, zb: 0 }, controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
     };
   }
 
@@ -1030,12 +1091,12 @@ export class RoadNetwork {
     for (const n of data.nodes) {
       // Reserve loaded IDs so a later allocation cannot collide with them.
       net.ids?.reserve(n.id);
-      const node = { id: n.id, x: n.x, y: n.y, type: n.type, edges: new Set(), light: n.light, signalProgram: n.signalProgram ? JSON.parse(JSON.stringify(n.signalProgram)) : undefined, buildingIds: Array.isArray(n.buildingIds) ? [...n.buildingIds] : [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
+      const node = { id: n.id, x: n.x, y: n.y, z: Number.isFinite(n.z) ? n.z : 0, type: n.type, edges: new Set(), light: n.light, signalProgram: n.signalProgram ? JSON.parse(JSON.stringify(n.signalProgram)) : undefined, buildingIds: Array.isArray(n.buildingIds) ? [...n.buildingIds] : [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false };
       net.nodes.set(node.id, node);
     }
     for (const e of data.edges) {
       net.ids?.reserve(e.id);
-      const edge = { id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: { ...e.profile } } : {}), controls: e.controls, pts: null, cum: null, total: 0, segIdx: null, driveways: e.driveways || [], ring: e.ring || false, oneway: e.oneway || false };
+      const edge = { id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: { ...e.profile } } : {}), grade: e.grade ? { ...e.grade } : { kind: 'ground', za: 0, zb: 0 }, controls: e.controls, pts: null, cum: null, total: 0, segIdx: null, driveways: e.driveways || [], ring: e.ring || false, oneway: e.oneway || false };
       net.edges.set(edge.id, edge);
       net.nodes.get(e.a)?.edges.add(e.id);
       net.nodes.get(e.b)?.edges.add(e.id);
