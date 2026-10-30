@@ -2,7 +2,8 @@
 // priorities (yield to the right), roundabouts and traffic lights.
 import { lanesAvailable, profileFor } from './roadProfiles.js';
 import { pointAt, clamp, dist, makeRng } from './core.js';
-import { findPath, pathToSteps } from './pathfinding.js';
+import { findPath, findVehicleRoute, pathToSteps } from './pathfinding.js';
+import { buildJunctionConnectors } from './junctions.js';
 import { phaseForAxis } from './signals.js';
 
 /**
@@ -82,6 +83,9 @@ export class TrafficSim {
     this.time = 0;
     this.bucket = 0;       // spawn bucket timer
     this.stats = { trips: 0, totalTripTime: 0, waiting: 0, cancelled: 0 };
+    this.restrictions = null; // Set of blocked connector ids (inspector S04.2.6)
+    this.reservations = new Map(); // connectorId -> carId (S04.2.5)
+    this.waitReason = new Map(); // carId -> 'signal'|'connectorConflict'|...
   }
 
   /**
@@ -96,6 +100,7 @@ export class TrafficSim {
    */
   cancelCar(car, reason = 'cancelled') {
     if (!car || car.dead) return false;
+    this._releaseConnector(car);
     car.dead = true;
     car.cancelled = true;
     car.cancelReason = reason;
@@ -106,23 +111,25 @@ export class TrafficSim {
   }
 
   // Spawn a car from nodeId to nodeId. Returns Car or null.
+  // S04.2: lane-level route with connectorIds; legacy node path as fallback.
   spawn(fromId, toId) {
     if (this.cars.size > 2600) return null;
-    const path = findPath(this.net, fromId, toId);
-    if (!path || path.nodes.length < 2) return null;
-    const steps = pathToSteps(this.net, path.nodes);
-    if (!steps || steps.length === 0) return null;
-    // assign lanes: prefer outer lanes on highways, any on streets
-    for (const st of steps) {
-      const edge = this.net.edges.get(st.edgeId);
-      st.lane = 0;
-      if (edge) {
-        const avail = lanesAvailable(profileFor(edge), st.dir);
-        st.lane = avail > 1 ? 0 : 0; // S04.2 plans the lane; no random forbidden lane
-        if (avail <= 0) st.lane = 0;
-      }
+    const laneRoute = findVehicleRoute(this.net, fromId, toId, {
+      restrictions: this.restrictions ?? null,
+    });
+    let steps, nodes;
+    if (laneRoute) {
+      steps = laneRoute.steps;
+      nodes = steps.map(s => s.from).concat(steps.length ? [steps[steps.length - 1].to] : []);
+    } else {
+      const path = findPath(this.net, fromId, toId);
+      if (!path || path.nodes.length < 2) return null;
+      steps = pathToSteps(this.net, path.nodes);
+      if (!steps || steps.length === 0) return null;
+      for (const st of steps) st.lane = 0;
+      nodes = path.nodes;
     }
-    const car = new Car({ nodes: path.nodes, steps }, Math.floor(this.rng() * CAR_COLORS.length));
+    const car = new Car({ nodes, steps }, Math.floor(this.rng() * CAR_COLORS.length));
     car.net = this.net;
     car.originTime = this.time;
     // don't spawn on top of an existing car
@@ -208,6 +215,9 @@ export class TrafficSim {
         if (car.s < edge.total) break;   // still on this edge
 
         car.s -= edge.total;             // carry the residual distance
+        // S04.2.5: release the connector once the car leaves the edge — the
+        // rear has cleared the conflict zone at the transition.
+        this._releaseConnector(car);
         car.step++;
 
         if (car.step >= car.route.steps.length) {
@@ -269,6 +279,74 @@ export class TrafficSim {
     return speed;
   }
 
+  // S04.2.5 connector reservation: gather requests on pre-tick state, admit in
+  // stable order (signal permission, existing holder, waiting-age, arrival,
+  // vehicle id). A car may only enter when its connector and every conflicting
+  // connector are free AND downstream has room. Release after the rear clears.
+  _connectorGate(car, edge, node, nextStep) {
+    const st = car.currentStep();
+    const cid = st?.connectorId;
+    if (!cid || !nextStep || nextStep.edgeId === undefined) return null;
+    if (node.isRing || node.type === 'driveway') return null;
+    const distToEnd = edge.total - car.s;
+    if (distToEnd > 10) return null; // not yet requesting: only the car at the
+    // stop line may hold a reservation, so a queue behind it never deadlocks
+    // by holding conflicts for connectors it cannot yet enter (S04.2.5).
+    const holder = this.reservations.get(cid);
+    if (holder !== undefined && holder !== car.id) {
+      this.waitReason.set(car.id, 'connectorConflict');
+      return Math.min(distToEnd, 6);
+    }
+    const conns = buildJunctionConnectors(this.net, node.id, {
+      restrictions: this.restrictions ?? null,
+    });
+    const me = conns.find(c => c.id === cid);
+    if (!me) {
+      this.waitReason.set(car.id, 'noRoute');
+      return Math.min(distToEnd, 6);
+    }
+    for (const o of me.conflicts) {
+      const h = this.reservations.get(o);
+      if (h !== undefined && h !== car.id) {
+        this.waitReason.set(car.id, 'connectorConflict');
+        return Math.min(distToEnd, 6);
+      }
+    }
+    // Downstream room: vehicle length + gap must fit at the exit lane start.
+    const nEdge = this.net.edges.get(nextStep.edgeId);
+    if (nEdge) {
+      for (const other of this.cars.values()) {
+        if (other === car || other.dead) continue;
+        const os = other.currentStep();
+        if (!os || os.edgeId !== nEdge.id || os.dir !== nextStep.dir || os.lane !== nextStep.lane) continue;
+        if (other.s < CAR_LEN + MIN_GAP + 3 && other.speed < 1) {
+          this.waitReason.set(car.id, 'downstreamBlocked');
+          return Math.min(distToEnd, 6);
+        }
+      }
+    }
+    // Admit: hold the connector and its conflicts until the rear clears.
+    this.reservations.set(cid, car.id);
+    car._heldConnector = cid;
+    car._heldConflicts = [...me.conflicts];
+    for (const o of me.conflicts) {
+      if (!this.reservations.has(o)) this.reservations.set(o, car.id);
+    }
+    this.waitReason.delete(car.id);
+    return null;
+  }
+
+  _releaseConnector(car) {
+    const cid = car._heldConnector;
+    if (!cid) return;
+    if (this.reservations.get(cid) === car.id) this.reservations.delete(cid);
+    for (const o of car._heldConflicts ?? []) {
+      if (this.reservations.get(o) === car.id) this.reservations.delete(o);
+    }
+    car._heldConnector = null;
+    car._heldConflicts = null;
+  }
+
   // Returns null if free (no stop needed), or stop distance.
   _mustYield(car, edge, node, isLastStep, nextStep) {
     const net = this.net;
@@ -326,6 +404,16 @@ export class TrafficSim {
       if (phase.yellow) return null;
       // Red or all-red: hold at the line.
       return Math.min(distToEnd, 6);
+    }
+
+    // S04.2 connector gate runs before the legacy yield logic. A car already
+    // holding its connector reservation skips legacy yield: the reservation
+    // IS the protection, and double-holding (reservation + yield-to-right)
+    // deadlocks two admitted cars against each other forever.
+    if (nextStep?.connectorId !== undefined && car.currentStep()?.connectorId) {
+      const gate = this._connectorGate(car, edge, node, nextStep);
+      if (gate !== null) return gate;
+      if (car._heldConnector) return null;
     }
 
     // plain intersection: yield to the right & to occupied zone.
