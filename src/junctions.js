@@ -73,7 +73,10 @@ export function buildJunctionConnectors(net, nodeId, options = {}) {
   const exits = [];
   for (const eid of node.edges) {
     const edge = net.edges.get(eid);
-    if (!edge || edge.ring) continue;
+    if (!edge) continue;
+    // S04.6 ring circulation: ring edges participate as exits (entry from an
+    // arm into the ring) and as entries (ring into an arm, or ring-to-ring).
+    // Plain junctions are unaffected: they have no ring edges.
     const prof = profileFor(edge);
     // Entry: arriving AT node. Exit: leaving node.
     if (nodeId === edge.b && lanesAvailable(prof, 1) > 0) {
@@ -95,11 +98,16 @@ export function buildJunctionConnectors(net, nodeId, options = {}) {
   }
   for (const from of entries) {
     const inTan = entryTangent(from.edge, nodeId);
+    const fromRing = !!from.edge.ring;
     for (const exit of exits) {
       if (exit.edgeId === from.edgeId) continue; // no same-edge U-turn
+      const toRing = !!exit.edge.ring;
+      // Non-ring to non-ring at a ring node: arms never connect directly;
+      // they must travel via the ring. Ring-to-ring is circulation.
+      if (!fromRing && !toRing && node.isRing) continue;
       const outTan = exitTangent(exit.edge, nodeId);
       const turn = turnType(inTan, outTan);
-      if (turn === 'uturn') continue;
+      if (turn === 'uturn' && !fromRing && !toRing) continue;
       // Lane mapping: through keeps lane when possible, turns take outer lanes.
       const toLane = turn === 'through'
         ? Math.min(from.lane, exit.lanes - 1)

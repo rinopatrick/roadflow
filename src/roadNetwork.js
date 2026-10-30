@@ -687,11 +687,57 @@ export class RoadNetwork {
       const edge = this._makeEdge(a.id, b.id, ringCls, [mid]);
       edge.ring = true;
       edge.oneway = true;
+      // S04.6: explicit single-lane ring profile (forward 1 / backward 0).
+      // setRingLanes upgrades it to 2; split preserves it via meta.profile.
+      edge.profile = { forward: 1, backward: 0, laneWidth: 6, medianWidth: 0, shoulderWidth: 1, speed: 14, access: 'local' };
       ringEdgeIds.push(edge.id);
     }
     this.resolveCrossings(ringEdgeIds);
     this.version++;
     return { ringNodeIds, ringEdgeIds };
+  }
+
+  /**
+   * S04.6 two-lane ring policy. `nodeId` is any node on the ring; `lanes`
+   * must be 1 or 2. Outer lane serves near exits; inner lane only via
+   * designated legal connectors (no voluntary changes inside the ring —
+   * enforced in TrafficSim by skipping ring edges in _updateLaneChanges).
+   * Impossible patterns (non-ring node, other counts) are rejected.
+   *
+   * @returns {boolean} true when the whole ring was converted
+   */
+  setRingLanes(nodeId, lanes) {
+    if (lanes !== 1 && lanes !== 2) return false;
+    const start = this.nodes.get(nodeId);
+    if (!start) return false;
+    // Collect the ring component.
+    let entry = null;
+    if (start.isRing) entry = start.id;
+    else for (const eid of start.edges) {
+      const e = this.edges.get(eid);
+      if (e?.ring) { entry = e.a; break; }
+    }
+    if (!entry) return false;
+    const ringEdges = [];
+    const seen = new Set([entry]);
+    const queue = [entry];
+    while (queue.length) {
+      const nid = queue.pop();
+      for (const eid of this.nodes.get(nid).edges) {
+        const e = this.edges.get(eid);
+        if (!e?.ring) continue;
+        if (!ringEdges.includes(eid)) ringEdges.push(eid);
+        const other = e.a === nid ? e.b : e.a;
+        if (!seen.has(other)) { seen.add(other); queue.push(other); }
+      }
+    }
+    if (!ringEdges.length) return false;
+    for (const eid of ringEdges) {
+      const e = this.edges.get(eid);
+      e.profile = { ...(e.profile ?? {}), forward: lanes, backward: 0, medianWidth: 0 };
+    }
+    this.version++;
+    return true;
   }
 
   // Bulldoze a whole roundabout given any node on/inside it. Restores a plain
