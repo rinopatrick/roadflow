@@ -1,6 +1,7 @@
 // Traffic simulation — cars with IDM-lite car following, intersection
 // priorities (yield to the right), roundabouts and traffic lights.
 import { lanesAvailable, profileFor } from './roadProfiles.js';
+import { canChangeLane, planExitLane, changeProgress, LANE_CHANGE, VEHICLE_LENGTH } from './laneChanges.js';
 import { pointAt, clamp, dist, makeRng } from './core.js';
 import { findPath, findVehicleRoute, pathToSteps } from './pathfinding.js';
 import { buildJunctionConnectors } from './junctions.js';
@@ -67,7 +68,17 @@ export class Car {
     if (!edge) { this.dead = true; return; }
     const avail = lanesAvailable(profileFor(edge), step.dir);
     const lane = Math.min(step.lane ?? 0, Math.max(avail - 1, 0));
-    const p = net.lanePoint(edge, step.dir, lane, this.s);
+    // S04.3 lateral transition: interpolate lane centres so the visual
+    // movement is smooth instead of a teleport.
+    let p;
+    if (this._changing) {
+      const t = changeProgress(this._changing.elapsed);
+      const a = net.lanePoint(edge, step.dir, lane, this.s);
+      const b = net.lanePoint(edge, step.dir, this._changing.toLane, this.s);
+      p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, dir: a.dir };
+    } else {
+      p = net.lanePoint(edge, step.dir, lane, this.s);
+    }
     this.x = p.x; this.y = p.y;
     this.dir = step.dir === 1 ? p.dir : p.dir + Math.PI;
   }
@@ -165,6 +176,10 @@ export class TrafficSim {
       intents.set(car.id, desired);
     }
 
+    // 1b. lane changes: mandatory exit-lane planning + voluntary cooldown.
+    // A car in transition occupies BOTH lanes for collision checks.
+    this._updateLaneChanges(dt);
+
     // 2. car following per (edge, dir, lane)
     const lanes = new Map();
     for (const car of this.cars.values()) {
@@ -173,6 +188,11 @@ export class TrafficSim {
       const key = `${st.edgeId}:${st.dir}:${st.lane}`;
       if (!lanes.has(key)) lanes.set(key, []);
       lanes.get(key).push(car);
+      if (car._changing) {
+        const other = `${st.edgeId}:${st.dir}:${car._changing.toLane}`;
+        if (!lanes.has(other)) lanes.set(other, []);
+        lanes.get(other).push(car);
+      }
     }
     for (const list of lanes.values()) {
       list.sort((a, b) => a.s - b.s);
@@ -345,6 +365,101 @@ export class TrafficSim {
     }
     car._heldConnector = null;
     car._heldConflicts = null;
+  }
+
+  /**
+   * S04.3 lane-change planner, run once per tick before car following.
+   *
+   * Mandatory: the next connector needs a specific exit lane. Planning starts
+   * at max(60wu, speed*5s); if missed, the car continues legally and reroutes
+   * at the next safe node instead of cutting across. Voluntary changes
+   * (speed advantage) need cooldown + room and never happen near a stop line.
+   */
+  _updateLaneChanges(dt) {
+    for (const car of this.cars.values()) {
+      if (car.dead) continue;
+      const st = car.currentStep();
+      if (!st) continue;
+      const edge = this.net.edges.get(st.edgeId);
+      if (!edge || edge.ring) continue;
+      // Advance an in-progress transition.
+      if (car._changing) {
+        car._changing.elapsed += dt;
+        if (car._changing.elapsed >= LANE_CHANGE.duration) {
+          st.lane = car._changing.toLane;
+          car._changing = null;
+          car._cooldown = LANE_CHANGE.cooldown;
+        }
+        continue;
+      }
+      if (car._cooldown > 0) car._cooldown -= dt;
+      const nextStep = car.route.steps[car.step + 1];
+      const needLane = nextStep?.connectorLane ?? st.lane;
+      if (needLane === st.lane) continue;
+      // Mandatory exit-lane change only: voluntary speed changes arrive S04.5+.
+      const plan = planExitLane(
+        { lane: st.lane, s: car.s },
+        { toLane: needLane, edgeTotal: edge.total, speed: Math.max(car.speed, 8) },
+      );
+      if (plan.missed) {
+        this._rerouteFromNextNode(car);
+        continue;
+      }
+      if (car.s < plan.startS) continue; // too early: hold lane
+      const idx = this._laneIndex(edge, st.dir, car);
+      const ok = canChangeLane(
+        { s: car.s, speed: car.speed, lane: st.lane },
+        needLane, idx, { edgeTotal: edge.total },
+      );
+      if (!ok.ok) {
+        if (edge.total - car.s < LANE_CHANGE.noChangeNearJunction + 10) {
+          this._rerouteFromNextNode(car);
+        } else {
+          this.waitReason.set(car.id, 'laneChangeWait');
+        }
+        continue;
+      }
+      car._changing = {
+        fromLane: st.lane, toLane: needLane, startS: car.s,
+        duration: LANE_CHANGE.duration, elapsed: 0,
+      };
+      this.waitReason.delete(car.id);
+    }
+  }
+
+  /** Cars on the same edge+direction for gap checks (includes changers). */
+  _laneIndex(edge, dir, self) {
+    const cars = [];
+    for (const o of this.cars.values()) {
+      if (o === self || o.dead) continue;
+      const os = o.currentStep();
+      if (!os || os.edgeId !== edge.id || os.dir !== dir) continue;
+      cars.push({ lane: os.lane, s: o.s, speed: o.speed, _changing: o._changing });
+    }
+    return { cars };
+  }
+
+  /**
+   * Missed the required exit lane: continue legally on the current lane and
+   * replan from the next safe node. Never cut across at the last instant.
+   */
+  _rerouteFromNextNode(car) {
+    const st = car.currentStep();
+    if (!st || car._rerouted) return;
+    const edge = this.net.edges.get(st.edgeId);
+    if (!edge) return;
+    const nextNode = st.dir === 1 ? edge.b : edge.a;
+    const dest = car.route.steps[car.route.steps.length - 1]?.to;
+    if (!dest || nextNode === dest) return;
+    const fresh = findVehicleRoute(this.net, nextNode, dest, {
+      restrictions: this.restrictions ?? null,
+    });
+    if (!fresh || !fresh.steps.length) return;
+    // Splice: keep the current edge traversal, continue fresh from next node.
+    car.route.steps = [st, ...fresh.steps];
+    car.route.nodes = car.route.nodes.slice(0, car.step + 1).concat(fresh.steps.map(s => s.to));
+    car._rerouted = true;
+    this.waitReason.delete(car.id);
   }
 
   // Returns null if free (no stop needed), or stop distance.

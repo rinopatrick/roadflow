@@ -949,11 +949,21 @@ export class RoadNetwork {
   // Screen coords are y-down, so the driver's right-hand normal of direction
   // (dx,dy) is (-dy,dx). For reverse travel, the right side flips sign.
   lanePoint(edge, dir, i, s) {
-    const p = pointAt(edge.pts, edge.cum, dir === 1 ? s : edge.total - s);
+    return this.lanePointAt(edge, dir, this.signedLaneOffset(edge, dir, i), s);
+  }
+
+  /** Signed lateral offset of a lane centre (for interpolation). */
+  signedLaneOffset(edge, dir, i) {
     const off = Math.abs(laneCenterOffset(edge, dir, i));
+    return dir === 1 ? off : -off;
+  }
+
+  /** Point at an explicit signed lateral offset (S04.3 transitions). */
+  lanePointAt(edge, dir, off, s) {
+    const p = pointAt(edge.pts, edge.cum, dir === 1 ? s : edge.total - s);
     const nx = -Math.sin(p.dir), ny = Math.cos(p.dir); // right-hand normal (y-down)
     const sgn = dir === 1 ? 1 : -1;
-    return { x: p.x + nx * off * sgn, y: p.y + ny * off * sgn, dir: p.dir };
+    return { x: p.x + nx * Math.abs(off) * sgn, y: p.y + ny * Math.abs(off) * sgn, dir: p.dir };
   }
 
   // Serialize / restore (topology only; cars are not saved)

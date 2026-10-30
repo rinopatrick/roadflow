@@ -181,6 +181,7 @@ export function findVehicleRoute(net, fromId, toId, options = {}) {
   const steps = chain.map((vk, i) => {
     const v = vertOf.get(vk);
     const edge = net.edges.get(v.edgeId);
+    const nextV = i < chain.length - 1 ? vertOf.get(chain[i + 1]) : null;
     return {
       edgeId: v.edgeId,
       from: v.dir === 1 ? edge.a : edge.b,
@@ -188,6 +189,9 @@ export function findVehicleRoute(net, fromId, toId, options = {}) {
       dir: v.dir,
       lane: v.lane,
       connectorId: i < chain.length - 1 ? prev.get(chain[i + 1]).connectorId : null,
+      // S04.3: the lane the NEXT edge's connector starts from — the exit
+      // lane this edge must hold at the junction. Undefined on last step.
+      connectorLane: nextV?.lane,
     };
   });
   return { steps, time: g.get(goalKey), version: net.version };

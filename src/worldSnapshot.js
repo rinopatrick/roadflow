@@ -50,6 +50,8 @@ export const LIMITS = {
 const CAR_DATA_FIELDS = [
   'id', 'route', 'step', 's', 'speed', 'color', 'waiting',
   'speedFactor', 'tripTimer', 'purpose', 'homeId', 'destId', 'originTime',
+  // S04.3 lane-change state: a save mid-transition resumes the transition.
+  '_changing', '_cooldown', '_rerouted',
 ];
 
 /** Settings fields that are saved. */
