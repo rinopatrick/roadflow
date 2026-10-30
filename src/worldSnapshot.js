@@ -28,8 +28,8 @@ import { Economy } from './economy.js';
 import { TrafficSim, Car, getCarIdCounter, setCarIdCounter } from './traffic.js';
 import { createIdSource, makeRng } from './core.js';
 
-/** Current snapshot schema version. */
-export const SNAPSHOT_VERSION = 2;
+/** Current snapshot schema version. v3 adds per-edge profiles (S04.1). */
+export const SNAPSHOT_VERSION = 3;
 
 /** Oldest version this build can migrate from. */
 export const MIN_SUPPORTED_VERSION = 1;
@@ -260,11 +260,16 @@ export function validateSnapshot(raw) {
  * one shape.
  */
 function normalise(data, version, seed, warnings) {
+  // v3 migration: edges gain a profile. v1/v2 saves carry cls (+ring/oneway)
+  // only; the profile is derived deterministically so old cities load with
+  // unchanged topology and widths. Unknown legacy classes fall back to street.
+  const net = { nodes: data.net.nodes, edges: data.net.edges.map(migrateEdgeV3) };
+  if (version < 3) warnings.push('migrated road profiles to v3');
   const out = {
     v: SNAPSHOT_VERSION,
     savedAt: data.savedAt ?? Date.now(),
     map: { seed, generatorVersion: data.map?.generatorVersion ?? 1 },
-    net: data.net,
+    net,
     eco: {
       buildings: data.eco.buildings,
       xp: isFiniteNumber(data.eco.xp) ? data.eco.xp : 0,
@@ -294,6 +299,30 @@ function normalise(data, version, seed, warnings) {
     extensions: isObject(data.extensions) ? data.extensions : {},
   };
   return out;
+}
+
+/**
+ * Migrates one serialised edge to v3: attaches an explicit profile derived
+ * from cls + ring/oneway flags. Edges that already carry a profile keep it;
+ * motorway edges with legacy driveways keep access with a warning upstream.
+ */
+function migrateEdgeV3(e) {
+  if (e.profile) return { ...e, profile: { ...e.profile } };
+  const cls = ['street', 'avenue', 'highway'].includes(e.cls) ? e.cls : 'street';
+  const PRESETS = {
+    street: { forward: 1, backward: 1, laneWidth: 6.5, medianWidth: 1.2, shoulderWidth: 1, speed: 14, access: 'local' },
+    avenue: { forward: 2, backward: 2, laneWidth: 6, medianWidth: 1.2, shoulderWidth: 1, speed: 18, access: 'arterial' },
+    highway: { forward: 3, backward: 3, laneWidth: 6, medianWidth: 1.2, shoulderWidth: 1, speed: 30, access: 'motorway' },
+  };
+  const preset = PRESETS[cls];
+  const oneWay = !!(e.oneway || e.ring);
+  return {
+    ...e,
+    cls,
+    profile: oneWay
+      ? { ...preset, forward: Math.max(preset.forward, 1), backward: 0, medianWidth: 0 }
+      : { ...preset },
+  };
 }
 
 // --------------------------------------------------------------- hydrate ---

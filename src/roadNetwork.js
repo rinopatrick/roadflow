@@ -164,7 +164,7 @@ export class RoadNetwork {
    *   CONTRACTS section 4 reserves for S03.2; omitting it keeps the old
    *   behaviour of splining the controls.
    */
-  addRoad(controls, cls = 'street', options = {}) {
+  addRoad(controls, cls = 'street', options = {}, edgeOpts = {}) {
     const created = { nodeIds: [], edgeIds: [], reason: null };
     const versionBefore = this.version;
 
@@ -255,7 +255,7 @@ export class RoadNetwork {
       // grid was committed twice. Skip a slice that is already paved.
       if (this._sliceCovered(slice)) { skipped++; continue; }
 
-      const edge = this._makeEdgeFromPts(A.node.id, B.node.id, cls, slice);
+      const edge = this._makeEdgeFromPts(A.node.id, B.node.id, cls, slice, edgeOpts);
       created.edgeIds.push(edge.id);
     }
 
@@ -405,7 +405,7 @@ export class RoadNetwork {
    * sampled `pts` is what the simulation and renderer use, and it is serialized
    * so a reload reproduces the exact same shape.
    */
-  _makeEdgeFromPts(aId, bId, cls, pts) {
+  _makeEdgeFromPts(aId, bId, cls, pts, edgeOpts = {}) {
     const a = this.nodes.get(aId), b = this.nodes.get(bId);
     if (!a || !b) return null;
 
@@ -421,6 +421,8 @@ export class RoadNetwork {
     const id = this._newId('e');
     const edge = {
       id, a: aId, b: bId, cls,
+      ...(edgeOpts.profile ? { profile: { ...edgeOpts.profile } } : {}),
+      ...(edgeOpts.oneway ? { oneway: true } : {}),
       controls: this._decimateForControls(clean, cum),
       pts: clean,
       cum,
@@ -465,11 +467,14 @@ export class RoadNetwork {
     return node;
   }
 
-  _makeEdge(aId, bId, cls, midControls) {
+  _makeEdge(aId, bId, cls, midControls, edgeOpts = {}) {
     const id = this._newId('e');
     const controls = [[this.nodes.get(aId).x, this.nodes.get(aId).y], ...midControls, [this.nodes.get(bId).x, this.nodes.get(bId).y]];
     const edge = {
-      id, a: aId, b: bId, cls, controls,
+      id, a: aId, b: bId, cls,
+      ...(edgeOpts.profile ? { profile: { ...edgeOpts.profile } } : {}),
+      ...(edgeOpts.oneway ? { oneway: true } : {}),
+      controls,
       pts: null, cum: null, total: 0, segIdx: null,
       driveways: [],       // building ids attached
     };
@@ -516,12 +521,12 @@ export class RoadNetwork {
     const aId = edge.a;
     const bId = edge.b;
     const cls = edge.cls;
-    const meta = { oneway: !!edge.oneway, ring: !!edge.ring };
+    const meta = { oneway: !!edge.oneway, ring: !!edge.ring, profile: edge.profile ? { ...edge.profile } : null };
     const carried = [...edge.driveways];
 
     this.removeEdge(edgeId, true); // keep the endpoint nodes
-    const eA = this._makeEdgeFromPts(aId, node.id, cls, ptsA);
-    const eB = this._makeEdgeFromPts(node.id, bId, cls, ptsB);
+    const eA = this._makeEdgeFromPts(aId, node.id, cls, ptsA, meta.profile ? { profile: meta.profile, oneway: meta.oneway } : {});
+    const eB = this._makeEdgeFromPts(node.id, bId, cls, ptsB, meta.profile ? { profile: meta.profile, oneway: meta.oneway } : {});
 
     for (const child of [eA, eB]) {
       if (!child) continue;
@@ -960,7 +965,7 @@ export class RoadNetwork {
   toJSON() {
     return {
       nodes: [...this.nodes.values()].map(n => ({ id: n.id, x: n.x, y: n.y, type: n.type, light: n.light, buildingIds: n.buildingIds || [], drivewayFor: n.drivewayFor || null, isRing: n.isRing || false })),
-      edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
+      edges: [...this.edges.values()].map(e => ({ id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: e.profile } : {}), controls: e.controls, pts: e.pts, driveways: e.driveways, ring: e.ring || false, oneway: e.oneway || false })),
     };
   }
 
@@ -974,7 +979,7 @@ export class RoadNetwork {
     }
     for (const e of data.edges) {
       net.ids?.reserve(e.id);
-      const edge = { id: e.id, a: e.a, b: e.b, cls: e.cls, controls: e.controls, pts: null, cum: null, total: 0, segIdx: null, driveways: e.driveways || [], ring: e.ring || false, oneway: e.oneway || false };
+      const edge = { id: e.id, a: e.a, b: e.b, cls: e.cls, ...(e.profile ? { profile: { ...e.profile } } : {}), controls: e.controls, pts: null, cum: null, total: 0, segIdx: null, driveways: e.driveways || [], ring: e.ring || false, oneway: e.oneway || false };
       net.edges.set(edge.id, edge);
       net.nodes.get(e.a)?.edges.add(e.id);
       net.nodes.get(e.b)?.edges.add(e.id);

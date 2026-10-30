@@ -10,6 +10,9 @@ import { Renderer } from './render.js';
 import { toast, openInspect, closeInspect, inspectOpen, showPanel } from './ui.js';
 import { mountIcons } from './icons.js';
 import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, autosave, importGame, exportGame, exportFilename, AUTOSAVE_INTERVAL_MS } from './save.js';
+import { menuHandlers, bindToolbarButtons } from './menuBindings.js';
+import { initTemplatePanel, placeTemplateByName, templateAngleDeg, templateList } from './templatePanel.js';
+import { initStartScreen } from './startScreen.js';
 import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { reconcileTrafficAfterEdit } from './access.js';
 import { LEVEL_XP } from './economy.js';
@@ -19,9 +22,6 @@ import { ConstructionCursor, arrowDirection } from './construction.js';
 import { createHistory, COMMAND_KIND } from './worldCommands.js';
 import { evaluateRoadDraft, DRAFT_MODE } from './roadDraft.js';
 import { evaluateGridDraft } from './gridDraft.js';
-import {
-  builtinTemplates, transformTemplate, templateCommand, ROTATION_STEP_DEG,
-} from './templates.js';
 import { roadDimensions } from './roadProfiles.js';
 import {
   UPGRADE_CLASSES, ROUNDABOUT_RADIUS,
@@ -658,6 +658,7 @@ function openBuildingInspect(b) {
  */
 function openRoadInspect(edge) {
   const dim = roadDimensions(edge);
+  const arrows = dim.backward > 0 ? `${dim.forward} ⇄ ${dim.backward}` : `${dim.forward} → one-way`;
   let rows = '';
   for (const cls of UPGRADE_CLASSES) {
     const current = cls === edge.cls;
@@ -679,7 +680,9 @@ function openRoadInspect(edge) {
 
   openInspect(edge.cls.charAt(0).toUpperCase() + edge.cls.slice(1) + ' road', ''
     + '<div class="row"><span>Lanes</span><span class="v">'
-    + (dim.forward + dim.backward) + '</span></div>'
+    + (dim.forward + dim.backward) + ` (${arrows})` + '</span></div>'
+    + '<div class="row"><span>Access</span><span class="v">'
+    + dim.access + (edge.oneway ? ' · one-way a→b' : '') + '</span></div>'
     + '<div class="row"><span>Width</span><span class="v">'
     + dim.width.toFixed(0) + ' wu</span></div>'
     + '<div class="row"><span>Speed</span><span class="v">'
@@ -826,193 +829,8 @@ function setSpeed(s) {
 }
 
 // ---------- menu and inspector ----------
-const menu = initMenu({
-  onSpeed: setSpeed,
-  isSoundEnabled: () => audioEnabled(),
-  onSound: (enabled) => {
-    applyAudio(enabled);
-    if (enabled) sfx.click();
-  },
-  onSave: () => {
-    const res = saveGame(getWorld());
-    // Report what actually happened. The v1 handler printed "City saved." for a
-    // boolean, but the failure branch was easy to miss.
-    if (res.ok) dirty = false;
-    toast(res.ok ? 'City saved.' : `Save failed — ${res.error}`, res.ok ? '' : 'warn');
-    sfx.click();
-  },
-  onExport: () => {
-    // A download, not a silent clipboard write: the player asked for a file and
-    // gets one they can see.
-    try {
-      const text = exportGame(getWorld());
-      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = exportFilename();
-      a.click();
-      // Revoked on the next tick so the download has started.
-      setTimeout(() => URL.revokeObjectURL(url), 0);
-      toast('City exported.');
-    } catch (err) {
-      toast(`Export failed — ${err.message}`, 'warn');
-    }
-    sfx.click();
-  },
-  onImport: (text, filename) => {
-    // A failed import must leave the current city exactly as it was. `importGame`
-    // validates before it builds anything, and `replaceWorld` is only reached on
-    // success.
-    if (!text) { toast(`Could not read ${filename}.`, 'warn'); return; }
-    const result = importGame(text, {});
-    if (!result.ok) {
-      toast(`Import failed — ${result.error}. The current city is unchanged.`, 'warn');
-      return;
-    }
-    replaceWorld(result.world);
-    toast(`Imported ${filename}.`);
-    sfx.click();
-  },
-  onLoad: () => {
-    // Distinguish "nothing saved" from "saved but damaged". The v1 handler
-    // checked only existence, so a corrupt save reported "No save found.", which
-    // is misleading and hid the fact that a backup may be recoverable.
-    const probe = loadGame({ hooks: {} });
-    if (!probe.ok && probe.empty) { toast('No save found.', 'warn'); return; }
-    if (!probe.ok) {
-      const hint = hasRecoverableBackup() ? ' Try Recover.' : '';
-      toast(`${probe.error}.${hint}`, 'warn');
-      return;
-    }
-    // Valid: adopt it. `loadFromSave` re-reads so the hooks are wired by
-    // replaceWorld rather than by this probe.
-    if (loadFromSave()) toast('City loaded.');
-    sfx.click();
-  },
-  onRecover: () => {
-    if (!hasRecoverableBackup()) { toast('No backup is available to recover.', 'warn'); return; }
-    if (loadFromSave({ source: 'backup' })) toast('Recovered the previous save.');
-    sfx.click();
-  },
-  onNewMap: () => {
-    // Only interrupt when there is something to lose (DESIGN section 1).
-    if (dirty && !confirm('Start a new map? Unsaved progress is lost.')) return;
-    newGame();
-    // A new city is not an edit of the old one: undo must never resurrect it.
-    history.clear();
-    updateHistoryButtons();
-    toast('New map generated.');
-  },
-});
-
-document.getElementById('inspectClose').addEventListener('click', closeInspect);
-document.getElementById('fitbtn').addEventListener('click', () => {
-  fitCity();
-  sfx.click();
-});
-document.getElementById('undobtn').addEventListener('click', () => { undo(); sfx.click(); });
-
-// ---------- templates ----------
-//
-// A template is placed at the centre of the current view, rotated in 15-degree
-// steps. Only the implemented built-ins are offered: an inert button for a
-// template that does not exist is exactly what DESIGN section 1 forbids.
-let templateAngle = 0;
-const TEMPLATES = builtinTemplates();
-
-function renderTemplateList() {
-  const list = document.getElementById('tpllist');
-  if (!list) return;
-  list.innerHTML = '';
-  for (const t of TEMPLATES) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'menu-btn';
-    btn.dataset.template = t.name;
-    btn.textContent = t.name;
-    btn.addEventListener('click', () => placeTemplate(t));
-    list.appendChild(btn);
-  }
-  document.getElementById('tplAngle').textContent = templateAngle + '\u00b0';
-}
-
-/**
- * Places a template centred on the current view, as ONE undoable edit.
- * The whole template is validated before it commits, so a partial placement
- * cannot happen.
- */
-function placeTemplate(template) {
-  const placed = transformTemplate(template, {
-    rotateDeg: templateAngle,
-    dx: renderer.cam.x,
-    dy: renderer.cam.y,
-  });
-  if (!placed.ok) { setTemplateHint(placed.reason, true); return; }
-  const result = runCommand(templateCommand(placed.template));
-  if (!result) {
-    setTemplateHint('that template does not fit here', true);
-    return;
-  }
-  sfx.place();
-  setTemplateHint(placed.template.name + ' placed.', false);
-  showTemplates(false);
-}
-
-function setTemplateHint(text, warn) {
-  const el = document.getElementById('tplHint');
-  if (!el) return;
-  el.textContent = text;
-  el.classList.toggle('warn', !!warn);
-}
-
-function showTemplates(visible) {
-  const pop = document.getElementById('tplpop');
-  const btn = document.getElementById('tplbtn');
-  if (!pop || !btn) return;
-  pop.hidden = !visible;
-  btn.setAttribute('aria-expanded', String(visible));
-  if (visible) { showPanel(null); renderTemplateList(); }
-}
-
-document.getElementById('tplbtn')?.addEventListener('click', () => {
-  showTemplates(document.getElementById('tplpop').hidden);
-  sfx.click();
-});
-document.getElementById('tplRotL')?.addEventListener('click', () => {
-  templateAngle = ((templateAngle - ROTATION_STEP_DEG) % 360 + 360) % 360;
-  renderTemplateList();
-  sfx.click();
-});
-document.getElementById('tplRotR')?.addEventListener('click', () => {
-  templateAngle = (templateAngle + ROTATION_STEP_DEG) % 360;
-  renderTemplateList();
-  sfx.click();
-});
-document.getElementById('redobtn').addEventListener('click', () => { redo(); sfx.click(); });
-
-  // Start screen: three options (DESIGN section 6).
-  document.getElementById('btnTutorial')?.addEventListener('click', () => {
-    tutorialMode = true;
-    showStartScreen(false);
-    updateTutorial();
-    sfx.click();
-  });
-  document.getElementById('btnSandbox')?.addEventListener('click', () => {
-    tutorialMode = false;
-    showStartScreen(false);
-    sfx.click();
-  });
-  document.getElementById('btnContinue')?.addEventListener('click', () => {
-    showStartScreen(false);
-    if (loadFromSave()) toast('City loaded.');
-    else newGame();
-    sfx.click();
-  });
-  document.getElementById('btnSkipTutorial')?.addEventListener('click', () => {
-    tutorialMode = false;
-    document.getElementById('tutorialBanner').hidden = true;
-    sfx.click();
-  });
+// DOM bindings live in menuBindings.js / templatePanel.js / startScreen.js.
+// main.js keeps world logic; the boot ctx is the only bridge.
 
 /**
  * Applies the sound setting to the audio module AND the control that shows it.
@@ -1021,13 +839,6 @@ document.getElementById('redobtn').addEventListener('click', () => { redo(); sfx
  * — can call it: hoisting makes the order irrelevant, and `menu` is initialised
  * before boot runs.
  */
-/**
- * Shows or hides the start screen overlay.
- */
-function showStartScreen(visible) {
-  document.getElementById('help').classList.toggle('open', visible);
-}
-
 /**
  * Reads the live world and updates the tutorial banner.
  * Called from the main loop, so the step advances when the condition is met.
@@ -1043,9 +854,10 @@ function updateTutorial() {
   label.textContent = r.done ? 'Tutorial complete!' : `Step ${r.index + 1}/5: ${r.label}`;
 }
 
+let menuCtl = null;
 function applyAudio(enabled) {
   setAudioEnabled(enabled);
-  menu.applySound(enabled);
+  menuCtl?.applySound(enabled);
 }
 
 // ---------- layers ----------
@@ -1197,6 +1009,24 @@ function boot() {
     }
   }, AUTOSAVE_INTERVAL_MS);
 
+  // DOM bindings: menu/toolbar, template panel, start screen.
+  // ctx is the only bridge — no world logic leaves main.js.
+  const ctx = {
+    getWorld, replaceWorld, newGame, loadFromSave, runCommand, undo, redo,
+    fitCity, updateHistoryButtons, updateTutorial,
+    setSpeed, applyAudio,
+    isSoundEnabled: () => audioEnabled(),
+    isDirty: () => dirty,
+    clearDirty: () => { dirty = false; },
+    clearHistory: () => history.clear(),
+    setTutorialMode: (v) => { tutorialMode = v; },
+    camPos: () => ({ x: renderer.cam.x, y: renderer.cam.y }),
+  };
+  menuCtl = initMenu(menuHandlers(ctx));
+  bindToolbarButtons(ctx);
+  initTemplatePanel(ctx);
+  initStartScreen(ctx);
+
   // debug/testing hook
   // `renderer` and `save` are exposed so browser tests can set the camera
   // precisely and exercise storage directly. Read/write only; gameplay never
@@ -1227,14 +1057,9 @@ function boot() {
     grid: { evaluateGridDraft },
     demolitionPreview: (x, y) => demolitionPreview(getWorld(), x, y),
     templates: {
-      list: () => TEMPLATES.map(t => ({ name: t.name, segments: t.segments.length })),
-      angle: () => templateAngle,
-      place: (name) => {
-        const t = TEMPLATES.find(x => x.name === name);
-        if (!t) return false;
-        placeTemplate(t);
-        return true;
-      },
+      list: () => templateList(),
+      angle: () => templateAngleDeg(),
+      place: (name) => placeTemplateByName(name, ctx),
     },
     ROUNDABOUT_RADIUS,
     validateRoadUpgrade: (id, cls) => validateRoadUpgrade(getWorld(), id, cls),

@@ -1,6 +1,6 @@
 // Traffic simulation — cars with IDM-lite car following, intersection
 // priorities (yield to the right), roundabouts and traffic lights.
-import { ROAD_CLASS } from './roadNetwork.js';
+import { lanesAvailable, profileFor } from './roadProfiles.js';
 import { pointAt, clamp, dist, makeRng } from './core.js';
 import { findPath, pathToSteps } from './pathfinding.js';
 import { phaseForAxis } from './signals.js';
@@ -64,7 +64,8 @@ export class Car {
     if (!step) return;
     const edge = net.edges.get(step.edgeId);
     if (!edge) { this.dead = true; return; }
-    const lane = Math.min(step.lane ?? 0, ROAD_CLASS[edge.cls].lanesPerDir - 1);
+    const avail = lanesAvailable(profileFor(edge), step.dir);
+    const lane = Math.min(step.lane ?? 0, Math.max(avail - 1, 0));
     const p = net.lanePoint(edge, step.dir, lane, this.s);
     this.x = p.x; this.y = p.y;
     this.dir = step.dir === 1 ? p.dir : p.dir + Math.PI;
@@ -114,9 +115,12 @@ export class TrafficSim {
     // assign lanes: prefer outer lanes on highways, any on streets
     for (const st of steps) {
       const edge = this.net.edges.get(st.edgeId);
-      st.lane = edge && !edge.oneway
-        ? Math.floor(this.rng() * ROAD_CLASS[edge.cls].lanesPerDir)
-        : 0;
+      st.lane = 0;
+      if (edge) {
+        const avail = lanesAvailable(profileFor(edge), st.dir);
+        st.lane = avail > 1 ? 0 : 0; // S04.2 plans the lane; no random forbidden lane
+        if (avail <= 0) st.lane = 0;
+      }
     }
     const car = new Car({ nodes: path.nodes, steps }, Math.floor(this.rng() * CAR_COLORS.length));
     car.net = this.net;
@@ -246,10 +250,10 @@ export class TrafficSim {
     const st = car.currentStep();
     const edge = net.edges.get(st.edgeId);
     if (!edge) return 0;
-    const cls = ROAD_CLASS[edge.cls];
+    const { speed } = profileFor(edge);
     const distToEnd = edge.total - car.s;
     const nextNode = net.nodes.get(st.to);
-    if (!nextNode) return cls.speed;
+    if (!nextNode) return speed;
 
     const nextStep = car.route.steps[car.step + 1] || null;
 
@@ -258,11 +262,11 @@ export class TrafficSim {
     if (stopDist !== null) {
       // decelerate to stop at the line
       const v = Math.sqrt(Math.max(0, 2 * 6 * Math.max(0, stopDist - 1.5)));
-      return Math.min(cls.speed, v);
+      return Math.min(speed, v);
     }
     // curve speed limit near nodes
-    if (distToEnd < 25 && nextNode.edges.size > 2) return Math.min(cls.speed, 8);
-    return cls.speed;
+    if (distToEnd < 25 && nextNode.edges.size > 2) return Math.min(speed, 8);
+    return speed;
   }
 
   // Returns null if free (no stop needed), or stop distance.

@@ -76,14 +76,90 @@ export const ROAD_PRESETS = {
   },
 };
 
-/** Resolves the profile for an edge-like object, a class name, or undefined. */
-function resolveProfile(edgeOrClass) {
+/** Bounds for per-edge profiles (CONTRACTS section 3, S04.1). */
+export const PROFILE_LIMITS = {
+  lanes: { min: 0, max: 4 },
+  total: { min: 1, max: 8 },
+  speed: { min: 1, max: 40 },
+};
+
+const ACCESS_CLASSES = ['local', 'arterial', 'motorway'];
+
+/**
+ * Validates and completes a profile record. Partial input fills from `base`;
+ * explicit zeros are kept (a one-way road has backward 0).
+ */
+export function normaliseProfile(input = {}, base = ROAD_PRESETS.street) {
+  const get = (k) => (input[k] !== undefined ? input[k] : base[k]);
+  const forward = get('forward');
+  const backward = get('backward');
+  const speed = get('speed');
+  const access = get('access');
+  const laneWidth = get('laneWidth');
+  const medianWidth = get('medianWidth');
+  const shoulderWidth = get('shoulderWidth');
+  if (!Number.isInteger(forward) || forward < 0 || forward > 4) {
+    throw new RangeError(`forward lanes must be an integer 0..4, got ${forward}`);
+  }
+  if (!Number.isInteger(backward) || backward < 0 || backward > 4) {
+    throw new RangeError(`backward lanes must be an integer 0..4, got ${backward}`);
+  }
+  if (forward + backward < 1 || forward + backward > 8) {
+    throw new RangeError(`total lanes must be 1..8, got ${forward + backward}`);
+  }
+  if (!Number.isFinite(speed) || speed < 1 || speed > 40) {
+    throw new RangeError(`speed must be 1..40 wu/s, got ${speed}`);
+  }
+  if (!ACCESS_CLASSES.includes(access)) {
+    throw new RangeError(`access must be ${ACCESS_CLASSES.join(' | ')}, got ${access}`);
+  }
+  return { forward, backward, laneWidth, medianWidth, shoulderWidth, speed, access };
+}
+
+/**
+ * Resolves the effective profile for an edge-like object, a class name, or
+ * undefined. `edge.profile` overrides win over the `cls` preset; `cls` stays
+ * a style label. Ring edges are forward 1 / backward 0 with no median.
+ */
+export function profileFor(edgeOrClass) {
+  if (edgeOrClass && typeof edgeOrClass === 'object' && edgeOrClass.profile) {
+    const cls = edgeOrClass.cls ?? 'street';
+    const preset = ROAD_PRESETS[cls];
+    if (!preset) throw new RangeError(`unknown road class: ${cls}`);
+    return normaliseProfile(edgeOrClass.profile, preset);
+  }
+  return resolvePreset(edgeOrClass);
+}
+
+function resolvePreset(edgeOrClass) {
   const cls = typeof edgeOrClass === 'string'
     ? edgeOrClass
     : edgeOrClass?.cls ?? 'street';
   const preset = ROAD_PRESETS[cls];
   if (!preset) throw new RangeError(`unknown road class: ${cls}`);
-  return preset;
+  if (edgeOrClass && typeof edgeOrClass === 'object' && (edgeOrClass.oneway || edgeOrClass.ring)) {
+    return normaliseProfile(
+      { forward: Math.max(preset.forward, 1), backward: 0, medianWidth: 0 },
+      preset,
+    );
+  }
+  return { ...preset };
+}
+
+/** True when the resolved profile carries traffic in one direction only. */
+export function isOneWayProfile(profile) {
+  return profile.backward === 0 && profile.forward > 0;
+}
+
+/** Lane count available in a travel direction (0 = cannot route). */
+export function lanesAvailable(profile, dir) {
+  if (dir !== 1 && dir !== -1) throw new RangeError(`direction must be 1 or -1, got ${dir}`);
+  return dir === 1 ? profile.forward : profile.backward;
+}
+
+/** Resolves the profile for an edge-like object, a class name, or undefined. */
+function resolveProfile(edgeOrClass) {
+  return profileFor(edgeOrClass);
 }
 
 /**
@@ -106,10 +182,10 @@ function isOneWay(edgeOrClass) {
  */
 export function roadDimensions(edgeOrClass) {
   const preset = resolveProfile(edgeOrClass);
-  const oneWay = isOneWay(edgeOrClass);
+  const oneWay = preset.backward === 0 && preset.forward > 0;
 
-  const forward = oneWay ? Math.max(preset.forward, 1) : preset.forward;
-  const backward = oneWay ? 0 : preset.backward;
+  const forward = preset.forward;
+  const backward = preset.backward;
   // A one-way road has no centre division to divide.
   const medianWidth = oneWay ? 0 : preset.medianWidth;
   const shoulderWidth = preset.shoulderWidth;

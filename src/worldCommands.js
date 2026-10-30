@@ -17,9 +17,10 @@
 // they can be logged, compared and (later) replayed.
 import { serializeWorld, hydrateWorld } from './worldSnapshot.js';
 import { polylineLengths, projectOnPolyline } from './core.js';
-import { roadDimensions } from './roadProfiles.js';
+import { profileFor as profileForEdge, roadDimensions } from './roadProfiles.js';
 import {
   validateRoadUpgrade, validateRoundaboutRadius, validateBuildingMove,
+  validateProfileEdit, remapCarsForProfile,
 } from './constructionEdits.js';
 
 /**
@@ -40,6 +41,9 @@ export const COMMAND_KIND = {
   SET_SIGNAL: 'setSignal',
   ADD_GRID: 'addGrid',
   UPGRADE_ROAD: 'upgradeRoad',
+  EDIT_PROFILE: 'editProfile',
+  SET_ONEWAY: 'setOneway',
+  ADD_LANE: 'addLane',
   MOVE_BUILDING: 'moveBuilding',
   APPLY_TEMPLATE: 'applyTemplate',
 };
@@ -66,6 +70,16 @@ export const SIGNAL_LIMITS = {
 const SPLIT_TOLERANCE_WU = 1.5;
 
 const fail = (reason) => ({ ok: false, reason });
+
+/** Swaps an edge's endpoints so one-way `reverse` flips travel direction. */
+function reverseEdgeEndpoints(world, edge) {
+  const { a, b } = edge;
+  edge.a = b;
+  edge.b = a;
+  // Controls run a→b; reversing keeps geometry identical, order swapped.
+  edge.controls = [...edge.controls].reverse();
+  void world;
+}
 
 /**
  * A deep copy of snapshot data.
@@ -401,6 +415,55 @@ const HANDLERS = {
    * ones created. Any failing segment aborts the whole grid: a half-built grid
    * is worse than no grid, and the working copy is discarded by the dispatcher.
    */
+  /**
+   * Edits ONE road's lane/speed/access profile in place.
+   *
+   * Edge ID and topology preserved; only the profile changes. Footprint is
+   * validated like an upgrade. Cars on removed lanes remap to an adjacent lane
+   * on the same edge/direction when paused; otherwise removal of an occupied
+   * lane is refused rather than overlapping cars.
+   */
+  [COMMAND_KIND.EDIT_PROFILE](world, cmd) {
+    const check = validateProfileEdit(world, cmd.edgeId, cmd.profile ?? {});
+    if (!check.ok) return fail(check.reason);
+    const edge = world.net.edges.get(cmd.edgeId);
+    const remap = remapCarsForProfile(world, edge, check.profile, { paused: cmd.paused === true });
+    if (!remap.ok) return fail(remap.reason);
+    edge.profile = { ...check.profile };
+    edge.oneway = check.profile.backward === 0;
+    world.net.version++;
+    return { ok: true };
+  },
+
+  /**
+   * Converts a road to one-way (or back to two-way). Direction follows edge
+   * a→b unless `reverse` swaps the endpoints. Motorway driveways: new direct
+   * attachment refused at placement time; legacy access preserved on load with
+   * a warning (see normalise snapshot path), never silently deleted.
+   */
+  [COMMAND_KIND.SET_ONEWAY](world, cmd) {
+    const edge = world.net.edges.get(cmd.edgeId);
+    if (!edge) return fail(`no road with id ${cmd.edgeId}`);
+    if (edge.ring) return fail('a roundabout ring is already one-way');
+    const cur = profileForEdge(edge);
+    let patch;
+    if (cmd.oneway) {
+      patch = cmd.reverse
+        ? { forward: cur.backward > 0 ? cur.backward : cur.forward, backward: 0, medianWidth: 0 }
+        : { forward: cur.forward, backward: 0, medianWidth: 0 };
+      if (patch.forward < 1) patch.forward = 1;
+    } else {
+      patch = { forward: cur.forward, backward: Math.max(cur.forward, 1) };
+    }
+    const check = validateProfileEdit(world, cmd.edgeId, patch);
+    if (!check.ok) return fail(check.reason);
+    edge.profile = { ...check.profile };
+    edge.oneway = !!cmd.oneway;
+    if (cmd.oneway && cmd.reverse) reverseEdgeEndpoints(world, edge);
+    world.net.version++;
+    return { ok: true };
+  },
+
   [COMMAND_KIND.ADD_GRID](world, cmd) {
     const { segments, cls = 'street' } = cmd;
     if (!Array.isArray(segments) || segments.length === 0) {

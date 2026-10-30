@@ -1,6 +1,6 @@
 // A* pathfinding over the road network node graph.
 // Edge cost = length / speed (travel time), plus congestion penalty.
-import { ROAD_CLASS } from './roadNetwork.js';
+import { lanesAvailable, profileFor } from './roadProfiles.js';
 
 export function findPath(net, fromId, toId) {
   if (fromId === toId) return { nodes: [fromId], time: 0 };
@@ -47,7 +47,10 @@ export function findPath(net, fromId, toId) {
       if (edge.oneway && edge.a !== current) continue; // one-way (roundabout ring)
       const next = edge.a === current ? edge.b : edge.a;
       if (closed.has(next)) continue;
-      const speed = ROAD_CLASS[edge.cls].speed;
+      const prof = profileFor(edge);
+      // A direction with zero lanes cannot be routed (S04.1).
+      if (lanesAvailable(prof, edge.a === current ? 1 : -1) <= 0) continue;
+      const speed = prof.speed;
       const congestion = edge._congestion || 0; // 0..1
       const cost = edge.total / speed * (1 + congestion * 1.5);
       const tentative = gScore.get(current) + cost;

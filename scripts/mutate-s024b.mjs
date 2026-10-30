@@ -35,7 +35,7 @@ const MUTATIONS = [
   {
     name: 'D: the class boundary contour is removed',
     file: 'src/render/terrain.js',
-    from: '      if (nb !== at.biome || nbBelow !== at.biome) {',,
+    from: '      if (nb !== at.biome || nbBelow !== at.biome) {',
     to: '      if (false) {',
   },
   {

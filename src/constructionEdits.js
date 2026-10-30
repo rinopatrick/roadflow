@@ -16,7 +16,7 @@
 // the inspector can also call them to explain WHY something is refused before
 // the player clicks.
 import { dist } from './core.js';
-import { roadDimensions } from './roadProfiles.js';
+import { normaliseProfile, profileFor, roadDimensions } from './roadProfiles.js';
 import { evaluateBuildingPlacement, PLACEMENT_REASON } from './access.js';
 import { BUILDING_DEFS } from './economy.js';
 
@@ -103,6 +103,100 @@ export function validateRoadUpgrade(world, edgeId, newCls) {
   }
 
   return { ok: true, edgeId, from: edge.cls, to: newCls };
+}
+
+/**
+ * Validates a profile edit: lane/speed/access change on ONE edge, in place.
+ *
+ * Same footprint rule as validateRoadUpgrade: the new pavement must sit on
+ * buildable ground and must not swallow a building. Removing the last lane in
+ * a direction the network still routes through is refused with the reason.
+ * Motorway forbids new direct driveways; legacy access is preserved with a
+ * warning flag rather than deleted.
+ */
+export function validateProfileEdit(world, edgeId, patch) {
+  const deny = (reason, at = null) => ({ ok: false, reason, at });
+  const edge = world?.net?.edges?.get(edgeId);
+  if (!edge) return deny(`no road with id ${edgeId}`);
+  if (edge.ring) return deny('a roundabout ring cannot be edited lane by lane');
+  let next;
+  try {
+    next = normaliseProfile(patch ?? {}, profileFor(edge));
+  } catch (e) {
+    return deny(e.message);
+  }
+  const prev = profileFor(edge);
+  const toHalf = (next.forward + next.backward) * next.laneWidth
+    + (next.forward > 0 && next.backward > 0 ? next.medianWidth : 0)
+    + 2 * next.shoulderWidth;
+  const half = toHalf / 2;
+  const pts = edge.pts;
+  if (!Array.isArray(pts) || pts.length < 2) return deny('that road has no usable geometry');
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const q = pts[i + 1] ?? pts[i - 1];
+    const len = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+    const nx = -(q[1] - p[1]) / len;
+    const ny = (q[0] - p[0]) / len;
+    for (const side of [1, -1]) {
+      const ex = p[0] + nx * half * side;
+      const ey = p[1] + ny * half * side;
+      if (!world.terrain.isRoadable(ex, ey)) {
+        return deny('the new profile is too wide for the ground there', [ex, ey]);
+      }
+    }
+  }
+  for (const b of world.eco.buildings.values()) {
+    const def = BUILDING_DEFS[b.type];
+    if (!def) continue;
+    const clearance = def.size / 2 + half;
+    let nearest = Infinity;
+    for (let i = 1; i < pts.length; i++) {
+      nearest = Math.min(nearest, segDist(b.x, b.y, pts[i - 1], pts[i]));
+    }
+    if (nearest < clearance) {
+      return deny(`the new profile would cut through a ${def.label.toLowerCase()}`, [b.x, b.y]);
+    }
+  }
+  void prev;
+  return { ok: true, edgeId, profile: next };
+}
+
+/**
+ * Remaps cars travelling on an edge whose profile is about to shrink.
+ *
+ * Cars on a surviving lane keep it. Cars on a removed lane move to the
+ * nearest surviving lane in the same direction when `paused` is true and the
+ * target lane has room; otherwise the edit is refused rather than overlapping
+ * cars. Routes stay valid because topology is unchanged; only lane indices
+ * shift.
+ */
+export function remapCarsForProfile(world, edge, next, { paused = false } = {}) {
+  const cars = [...(world.traffic?.cars?.values() ?? [])]
+    .filter(c => !c.dead && c.route?.steps?.[c.step]?.edgeId === edge.id);
+  if (!cars.length) return { ok: true, remapped: 0 };
+  let remapped = 0;
+  for (const car of cars) {
+    const st = car.route.steps[car.step];
+    const avail = st.dir === 1 ? next.forward : next.backward;
+    if (st.lane < avail) continue;
+    const target = Math.max(avail - 1, 0);
+    if (!paused) {
+      return { ok: false, reason: `lane ${st.lane} is occupied; pause to remap or wait for it to clear` };
+    }
+    // Same edge/direction, nearest surviving lane; gap check against others.
+    const blocked = cars.some(o => o !== car && !o.dead
+      && o.route?.steps?.[o.step]?.edgeId === edge.id
+      && o.route.steps[o.step].dir === st.dir
+      && o.route.steps[o.step].lane === target
+      && Math.abs(o.s - car.s) < 12);
+    if (blocked) {
+      return { ok: false, reason: `lane ${target} is occupied; wait for it to clear` };
+    }
+    st.lane = target;
+    remapped++;
+  }
+  return { ok: true, remapped };
 }
 
 /** Distance from a point to a segment. */
