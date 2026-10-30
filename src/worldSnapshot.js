@@ -28,8 +28,8 @@ import { Economy } from './economy.js';
 import { TrafficSim, Car, getCarIdCounter, setCarIdCounter } from './traffic.js';
 import { createIdSource, makeRng } from './core.js';
 
-/** Current snapshot schema version. v4 adds node z + edge grade (S05.1). */
-export const SNAPSHOT_VERSION = 4;
+/** Current snapshot schema version. v5 adds building capacity (S06.1). */
+export const SNAPSHOT_VERSION = 5;
 
 /** Oldest version this build can migrate from. */
 export const MIN_SUPPORTED_VERSION = 1;
@@ -274,13 +274,23 @@ function normalise(data, version, seed, warnings) {
   };
   if (version < 3) warnings.push('migrated road profiles to v3');
   if (version < 4) warnings.push('migrated grades to v4 (all ground)');
+  // v5 migration: buildings gain assignedWorkers/serviceSlots. Old saves get
+  // defaults (0/0, shops get 4 slots); warn only when a capacity was inferred.
+  const ecoBuildings = (data.eco.buildings ?? []).map((b) => ({
+    ...b,
+    assignedWorkers: Number.isInteger(b.assignedWorkers) ? b.assignedWorkers : 0,
+    serviceSlots: Number.isInteger(b.serviceSlots)
+      ? b.serviceSlots
+      : b.type === 'shop' ? 4 : 0,
+  }));
+  if (version < 5) warnings.push('migrated building capacity to v5 (defaults)');
   const out = {
     v: SNAPSHOT_VERSION,
     savedAt: data.savedAt ?? Date.now(),
     map: { seed, generatorVersion: data.map?.generatorVersion ?? 1 },
     net,
     eco: {
-      buildings: data.eco.buildings,
+      buildings: ecoBuildings,
       xp: isFiniteNumber(data.eco.xp) ? data.eco.xp : 0,
       level: Number.isInteger(data.eco.level) ? data.eco.level : 1,
       batch: isObject(data.eco.batch) ? data.eco.batch : { house: 4, shop: 2, factory: 1 },

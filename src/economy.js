@@ -75,6 +75,15 @@ export class Economy {
   // same question without mutating the world (EVIDENCE E16). The signature is
   // unchanged for existing callers; `lastPlacementReason` carries the reason for
   // callers that want to explain a refusal.
+  // S06.1 capacity: houses hold residents, shops serve customers + jobs,
+  // factories hold jobs. Assigned workers are conserved globally.
+  _demandCaps(b) {
+    if (b.type === 'house') return { residents: b.residents ?? 4 };
+    if (b.type === 'shop') return { jobs: b.jobs ?? 2, customers: 4 };
+    if (b.type === 'factory') return { jobs: b.jobs ?? 6 };
+    return {};
+  }
+
   place(type, x, y) {
     const verdict = evaluateBuildingPlacement(this._world(), { type, x, y });
     if (!verdict.ok) {
@@ -98,6 +107,9 @@ export class Economy {
       drivewayNode: driveway.id,
       residents: BUILDING_DEFS[type].residents,
       jobs: BUILDING_DEFS[type].jobs,
+      // S06.1: capacity + assignment state, serializable and migrated.
+      assignedWorkers: 0,
+      serviceSlots: type === 'shop' ? 4 : 0,
       tripTimer: 8 + this.rng() * 30,
       // Cosmetic orientation from the separate cosmetic stream, so the
       // simulation draw sequence is completely unaffected. Drawn from a seeded
@@ -141,6 +153,32 @@ export class Economy {
     }
     b.reach[type] = found;
     return found;
+  }
+
+  /**
+   * S06.1 capacity-aware dispatch hook. The DemandManager (owned by main.js)
+   * drives journey admission; the economy exposes capacity + assignment.
+   * Assigns a worker from origin house to destination jobs when possible.
+   */
+  assignWorker(homeId, destId) {
+    const home = this.buildings.get(homeId);
+    const dest = this.buildings.get(destId);
+    if (!home || !dest) return false;
+    const used = this._workersAssigned();
+    const pop = this.population();
+    if (used >= pop) return false;
+    if ((dest.assignedWorkers ?? 0) >= (dest.jobs ?? 0)) return false;
+    home.assignedWorkers = (home.assignedWorkers ?? 0) + 1;
+    dest.assignedWorkers = (dest.assignedWorkers ?? 0) + 1;
+    return true;
+  }
+
+  _workersAssigned() {
+    let n = 0;
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'house') n += b.assignedWorkers ?? 0;
+    }
+    return n;
   }
 
   // Called by main loop. spawnCar: fn(fromNodeId, toNodeId) -> Car
