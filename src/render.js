@@ -258,18 +258,40 @@ export class Renderer {
       }
     }
 
+    // S05.2 grade-ordered road passes. Lower roads and cars first, then the
+    // bridge shadow, elevated decks, then deck cars. Markings hidden beneath a
+    // deck are trimmed so no dashes show through a bridge.
     // roads — passes so junction areas merge cleanly: soft shadow, every casing,
     // every fill on top covering the crossing casings (outlines never cut through
     // junction interiors), then the junction footprints themselves.
-    for (const edge of net.edges.values()) this._drawEdgeShadow(ctx, edge, zoom);
-    for (const edge of net.edges.values()) this._drawEdgeCasing(ctx, edge, zoom);
+    const ground = [], elevated = [];
+    for (const edge of net.edges.values()) {
+      ((edge.grade?.kind ?? 'ground') === 'ground' ? ground : elevated).push(edge);
+    }
+    const deckShadow = (edge) => {
+      if ((edge.grade?.kind ?? 'ground') !== 'bridge') return;
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.translate(10 * zoom, 14 * zoom); // deck casts onto the ground below
+      this._drawEdgeShadow(ctx, edge, zoom);
+      ctx.restore();
+    };
+    for (const edge of ground) this._drawEdgeShadow(ctx, edge, zoom);
+    for (const edge of ground) this._drawEdgeCasing(ctx, edge, zoom);
     // The junction outline belongs to the CASING pass, not after the fills: drawn
     // on top it would cut a grey seam straight across the pavement, which DESIGN
     // section 3 forbids ('hide internal seam/casing strokes').
     this._drawJunctionCasing(ctx, net, zoom);
-    for (const edge of net.edges.values()) this._drawEdgeFill(ctx, edge, zoom);
+    for (const edge of ground) this._drawEdgeFill(ctx, edge, zoom);
     this._drawJunctionFill(ctx, net, zoom);
-    for (const edge of net.edges.values()) this._drawEdgeMarkings(ctx, edge, net, zoom);
+    for (const edge of ground) this._drawEdgeMarkings(ctx, edge, net, zoom);
+    // Bridge shadows fall on the ground pass before any deck draws.
+    for (const edge of elevated) deckShadow(edge);
+    for (const edge of elevated) this._drawEdgeCasing(ctx, edge, zoom);
+    for (const edge of elevated) this._drawEdgeFill(ctx, edge, zoom);
+    for (const edge of elevated) {
+      if (!this._underDeck(edge, net)) this._drawEdgeMarkings(ctx, edge, net, zoom);
+    }
 
     // roundabout islands (grass center inside each ring)
     this._drawIslands(ctx, net, zoom);
@@ -283,8 +305,21 @@ export class Renderer {
     // buildings
     for (const b of eco.buildings.values()) this._drawBuilding(ctx, b, net, zoom);
 
-    // cars
-    if (traffic) for (const car of traffic.cars.values()) this._drawCar(ctx, car, zoom);
+    // S05.2: cars draw in grade order — ground cars before decks would be
+    // wrong; ground cars, then decks' shadows above, then elevated cars.
+    // (Deck shadows were drawn in the road pass; cars follow the same order.)
+    if (traffic) {
+      for (const car of traffic.cars.values()) {
+        const st = car.currentStep?.();
+        const edge = st ? net.edges.get(st.edgeId) : null;
+        if (!edge || (edge.grade?.kind ?? 'ground') === 'ground') this._drawCar(ctx, car, zoom);
+      }
+      for (const car of traffic.cars.values()) {
+        const st = car.currentStep?.();
+        const edge = st ? net.edges.get(st.edgeId) : null;
+        if (edge && (edge.grade?.kind ?? 'ground') !== 'ground') this._drawCar(ctx, car, zoom);
+      }
+    }
 
     // Analytic overlays. Exactly one can be active (DESIGN section 1), and the
     // id comes from the controller rather than from a flag on the renderer, so
@@ -318,6 +353,24 @@ export class Renderer {
     ctx.lineCap = this._capForEdge(edge); ctx.lineJoin = 'round';
     ctx.strokeStyle = edge.cls === 'highway' ? PALETTE.highwayOutline : PALETTE.roadOutline;
     ctx.stroke();
+  }
+
+  /** True when a lower road passes beneath this deck (S05.2). */
+  _underDeck(edge, net) {
+    if ((edge.grade?.kind ?? 'ground') === 'ground') return false;
+    const pts = edge.pts;
+    if (!pts || pts.length < 2) return false;
+    for (const o of net.edges.values()) {
+      if (o === edge || (o.grade?.kind ?? 'ground') !== 'ground') continue;
+      if (!o.pts || o.pts.length < 2) continue;
+      for (let i = 1; i < pts.length && i < 4; i++) {
+        for (let j = 1; j < o.pts.length; j++) {
+          const d = Math.hypot(pts[i][0] - o.pts[j][0], pts[i][1] - o.pts[j][1]);
+          if (d < 12) return true;
+        }
+      }
+    }
+    return false;
   }
 
   _drawEdgeShadow(ctx, edge, zoom) {

@@ -20,8 +20,16 @@ import { polylineLengths, projectOnPolyline } from './core.js';
 import { profileFor as profileForEdge, roadDimensions } from './roadProfiles.js';
 import {
   validateRoadUpgrade, validateRoundaboutRadius, validateBuildingMove,
-  validateProfileEdit, remapCarsForProfile,
+  validateProfileEdit, remapCarsForProfile, validateBridge as validateBridgeCmd,
 } from './constructionEdits.js';
+import { dist } from './core.js';
+
+function lerp2(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+function segLen2(a, b) {
+  return dist(a[0], a[1], b[0], b[1]);
+}
 import { buildJunctionConnectors as buildJunctionConnectorsFor } from './junctions.js';
 import { validateProgram as validateSignalProgram } from './signals.js';
 
@@ -49,6 +57,7 @@ export const COMMAND_KIND = {
   ADD_LANE: 'addLane',
   MOVE_BUILDING: 'moveBuilding',
   APPLY_TEMPLATE: 'applyTemplate',
+  BUILD_BRIDGE: 'buildBridge',
 };
 
 /** Every kind the dispatcher recognises. */
@@ -553,6 +562,45 @@ const HANDLERS = {
       if (!made) return fail(`template roundabout ${i + 1} could not be built`);
     }
 
+    return { ok: true };
+  },
+
+  /**
+   * Builds a bridge as ONE atomic transaction (S05.2): ground approach +
+   * ramp up + level deck + ramp down + ground approach. Points contract:
+   * [approachW, deckW, deckE, approachE]; ramp occupies the outer span of
+   * each side. One undo removes everything; any failure builds nothing.
+   */
+  [COMMAND_KIND.BUILD_BRIDGE](world, cmd) {
+    const { points, cls = 'street', deckZ = 12 } = cmd;
+    const check = validateBridgeCmd(world, { points, cls, deckZ });
+    if (!check.ok) return fail(check.reason);
+    const [w0, dW, dE, e0] = points;
+    const rampNeed = check.need;
+    // Ramp split points: 80wu-equiv from each deck end toward approaches.
+    const wLen = segLen2(w0, dW);
+    const eLen = segLen2(dE, e0);
+    const rW = lerp2(w0, dW, Math.min(rampNeed / wLen, 0.999));
+    const rE = lerp2(dE, e0, Math.min(rampNeed / eLen, 0.999));
+    // Segments: ground approach, ramp up, deck, ramp down, ground approach.
+    const segs = [
+      { pts: [w0, rW], grade: { kind: 'ground', za: 0, zb: 0 } },
+      { pts: [rW, dW], grade: { kind: 'ramp', za: 0, zb: deckZ } },
+      { pts: [dW, dE], grade: { kind: 'bridge', za: deckZ, zb: deckZ } },
+      { pts: [dE, rE], grade: { kind: 'ramp', za: deckZ, zb: 0 } },
+      { pts: [rE, e0], grade: { kind: 'ground', za: 0, zb: 0 } },
+    ];
+    for (const s of segs) {
+      const res = world.net.addRoad(s.pts, cls, { pts: s.pts }, {}, { grade: s.grade });
+      if (!res.edgeIds.length) {
+        return fail(`bridge segment could not be built: ${res.reason ?? 'unknown'}`);
+      }
+    }
+    // Grade-aware crossing resolution may refuse on collision gaps.
+    const allIds = [...world.net.edges.values()].map(e => e.id);
+    if (!world.net.resolveCrossings(allIds.slice(-8))) {
+      return fail('the bridge collides at an invalid height gap');
+    }
     return { ok: true };
   },
 

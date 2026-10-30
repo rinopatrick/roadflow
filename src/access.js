@@ -39,6 +39,9 @@ export const PLACEMENT_REASON = {
   TERRAIN: 'cannot build on water or rock',
   OVERLAP: 'too close to an existing building',
   NO_ROAD: `no road within ${ACCESS_MAX_DISTANCE} wu`,
+  // S05.2: buildings attach at grade. A bridge deck or ramp is not a street
+  // frontage — the message says why, not just "invalid terrain".
+  ELEVATED: 'buildings need a ground road — bridges and ramps have no driveways',
 };
 
 /**
@@ -69,8 +72,14 @@ export function evaluateBuildingPlacement(world, { type, x, y } = {}) {
     if (dist(x, y, b.x, b.y) < other.size + def.size) return deny(PLACEMENT_REASON.OVERLAP);
   }
 
-  const target = net.nearestRoadPoint(x, y, ACCESS_MAX_DISTANCE);
-  if (!target) return deny(PLACEMENT_REASON.NO_ROAD);
+  // S05.2: at grade only. If the only nearby road is elevated, the player is
+  // told the real reason instead of getting a generic "no road".
+  const target = net.nearestRoadPoint(x, y, ACCESS_MAX_DISTANCE, { groundOnly: true });
+  if (!target) {
+    const anyRoad = net.nearestRoadPoint(x, y, ACCESS_MAX_DISTANCE);
+    if (anyRoad) return deny(PLACEMENT_REASON.ELEVATED);
+    return deny(PLACEMENT_REASON.NO_ROAD);
+  }
 
   return { ok: true, reason: null, drivewayTarget: { x: target.x, y: target.y } };
 }

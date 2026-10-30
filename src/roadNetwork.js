@@ -882,10 +882,14 @@ export class RoadNetwork {
 
   // Find nearest road position for driveway attachment.
   // Returns {edgeId, s, x, y} or null.
-  nearestRoadPoint(x, y, maxDist = 400) {
+  // S05.2 groundOnly: buildings attach at grade — bridges, ramps and tunnels
+  // are skipped so no driveway lands on a deck.
+  nearestRoadPoint(x, y, maxDist = 400, options = {}) {
+    const groundOnly = options.groundOnly ?? false;
     let best = null, bd = maxDist;
     for (const e of this.edges.values()) {
       if (e.ring) continue; // no driveways onto a roundabout ring
+      if (groundOnly && (e.grade?.kind ?? 'ground') !== 'ground') continue;
       const { s, d } = projectOnPolyline(e.pts, e.cum, x, y);
       if (d < bd) { bd = d; best = { edgeId: e.id, s, d }; }
     }

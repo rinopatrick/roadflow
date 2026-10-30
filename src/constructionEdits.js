@@ -17,6 +17,7 @@
 // the player clicks.
 import { dist } from './core.js';
 import { normaliseProfile, profileFor, roadDimensions } from './roadProfiles.js';
+import { validateGrade, rampMinLength, GRADE_LEVELS, RAMP_MAX_SLOPE } from './grades.js';
 import { evaluateBuildingPlacement, PLACEMENT_REASON } from './access.js';
 import { BUILDING_DEFS } from './economy.js';
 
@@ -456,6 +457,84 @@ export function demolitionPreview(world, x, y, tol = {}) {
   }
 
   return empty;
+}
+
+/**
+ * Validates a bridge build BEFORE it commits (S05.2). Points are
+ * [west approach, ramp start, ramp end, east approach]: ground, ramp up,
+ * level deck, ramp down, ground. Checks: 4+ points, finite, ramp slope
+ * (deck height / 0.15 length), deck may cross water/lower roads but may not
+ * cut rock or buildings at its height, abutments on buildable ground, ramp
+ * footprints validated. Pure: explains WHY before the player clicks.
+ */
+export function validateBridge(world, { points, cls = 'street', deckZ = 12 } = {}) {
+  const deny = (reason, at = null) => ({ ok: false, reason, at });
+  if (!Array.isArray(points) || points.length < 4) {
+    return deny('a bridge needs four points: approach, ramp up, deck, ramp down');
+  }
+  for (const p of points) {
+    if (!Number.isFinite(p?.[0]) || !Number.isFinite(p?.[1])) return deny('bridge points must be finite');
+  }
+  if (!GRADE_LEVELS.includes(deckZ)) return deny(`deck height must be one of ${GRADE_LEVELS.join(', ')}`);
+  let preset;
+  try {
+    preset = { ...roadDimensions(cls) };
+  } catch {
+    return deny(`unknown road class: ${cls}`);
+  }
+  const half = preset.width / 2;
+  // Layout: [approachW, deckW, deckE, approachE]. p0->p1 covers ground
+  // approach + ramp up; p1->p2 is the level deck; p2->p3 ramp down + ground.
+  // The ramp occupies the outer 80wu-equivalent of each side span.
+  const [w0, dW, dE, e0] = points;
+  const wLen = dist(w0[0], w0[1], dW[0], dW[1]);
+  const eLen = dist(dE[0], dE[1], e0[0], e0[1]);
+  const need = rampMinLength(deckZ);
+  // Each side span holds a ramp AND a ground approach stub; the ramp alone
+  // needs `need` wu, so a side shorter than that cannot fit.
+  const rampLen = Math.min(wLen, eLen);
+  if (rampLen < need) {
+    return deny(`ramp too short: ${rampLen.toFixed(0)}wu < ${need.toFixed(0)}wu minimum for ${deckZ}wu at slope ${RAMP_MAX_SLOPE}`);
+  }
+  const MIN_APPROACH = 20;
+  if (wLen < need + MIN_APPROACH || eLen < need + MIN_APPROACH) {
+    return deny(`side spans need a ${MIN_APPROACH}wu ground approach beyond the ${need.toFixed(0)}wu ramp`);
+  }
+  // Abutments: ground approaches must sit on buildable ground.
+  for (const [i, p] of [w0, e0].entries()) {
+    if (!world.terrain.isRoadable(p[0], p[1])) {
+      return deny(`abutment ${i === 0 ? 'west' : 'east'} is not on buildable ground`, p);
+    }
+  }
+  // Deck footprint: may cross water and lower roads, but not rock/buildings.
+  const deckMid = [(dW[0] + dE[0]) / 2, (dW[1] + dE[1]) / 2];
+  void deckMid;
+  const segChecks = [
+    [w0, dW, 0], [dW, dE, deckZ], [dE, e0, 0],
+  ];
+  for (const [a, b, z] of segChecks) {
+    const len = dist(a[0], a[1], b[0], b[1]);
+    const steps = Math.max(1, Math.ceil(len / 4));
+    for (let k = 0; k <= steps; k++) {
+      const x = a[0] + (b[0] - a[0]) * (k / steps);
+      const y = a[1] + (b[1] - a[1]) * (k / steps);
+      if (z === 0 && !world.terrain.isRoadable(x, y)) {
+        return deny('ground approach crosses unbuildable ground', [x, y]);
+      }
+      if (z !== 0 && world.terrain.sample?.(x, y) === 'rock') {
+        return deny('the deck cannot cut through rock', [x, y]);
+      }
+      // Pavement width vs buildings at every height.
+      for (const bd of world.eco.buildings.values()) {
+        const def = BUILDING_DEFS[bd.type];
+        if (!def) continue;
+        if (Math.hypot(bd.x - x, bd.y - y) < def.size / 2 + half) {
+          return deny(`the bridge would cut through a ${def.label.toLowerCase()}`, [bd.x, bd.y]);
+        }
+      }
+    }
+  }
+  return { ok: true, rampLen, need };
 }
 
 /**
