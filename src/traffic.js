@@ -2,6 +2,7 @@
 // priorities (yield to the right), roundabouts and traffic lights.
 import { lanesAvailable, profileFor } from './roadProfiles.js';
 import { canChangeLane, planExitLane, changeProgress, LANE_CHANGE, VEHICLE_LENGTH } from './laneChanges.js';
+import { TrafficMetrics } from './trafficMetrics.js';
 import { pointAt, clamp, dist, makeRng } from './core.js';
 import { findPath, findVehicleRoute, pathToSteps } from './pathfinding.js';
 import { buildJunctionConnectors } from './junctions.js';
@@ -96,7 +97,10 @@ export class TrafficSim {
     this.stats = { trips: 0, totalTripTime: 0, waiting: 0, cancelled: 0 };
     this.restrictions = null; // Set of blocked connector ids (inspector S04.2.6)
     this.reservations = new Map(); // connectorId -> carId (S04.2.5)
-    this.waitReason = new Map(); // carId -> 'signal'|'connectorConflict'|...
+    this.waitReason = new Map(); // carId -> signal|downstreamBlocked|following|
+    // connectorConflict|laneChangeWait|noRoute — set by controlling branch
+    this.metrics = new TrafficMetrics();
+    this._metricsAcc = 0;
   }
 
   /**
@@ -180,6 +184,13 @@ export class TrafficSim {
     // A car in transition occupies BOTH lanes for collision checks.
     this._updateLaneChanges(dt);
 
+    // 1c. hysteresis reroute check (S04.5.4): cheap per-car gate, no scan.
+    for (const car of this.cars.values()) {
+      if (car.dead || car._changing || car._heldConnector) continue;
+      if (this.time - (car._lastReroute ?? -Infinity) < 10) continue;
+      if (car._routeInvalid) this._maybeReroute(car);
+    }
+
     // 2. car following per (edge, dir, lane)
     const lanes = new Map();
     for (const car of this.cars.values()) {
@@ -202,7 +213,13 @@ export class TrafficSim {
         let desired = intents.get(car.id);
         if (next) {
           const gap = next.s - car.s - CAR_LEN;
-          desired = Math.min(desired, this._followSpeed(car.speed, Math.max(gap, 0), next.speed));
+          const follow = this._followSpeed(car.speed, Math.max(gap, 0), next.speed);
+          if (follow < desired - 1e-9 && car.speed < 0.5) {
+            // The controlling branch is the leader ahead, not a signal.
+            // Only stamped when actually stopped: flowing cars are not queued.
+            if (!this.waitReason.has(car.id)) this.waitReason.set(car.id, 'following');
+          }
+          desired = Math.min(desired, follow);
         }
         // move
         car.speed += clamp(desired - car.speed, -30 * dt, 8 * dt);
@@ -245,6 +262,7 @@ export class TrafficSim {
           car.arrived = true;
           this.stats.trips++;
           this.stats.totalTripTime += car.tripTimer;
+          this.metrics.recordTrip(car.tripTimer);
           if (car.onArrive) car.onArrive(car);
           break;
         }
@@ -255,23 +273,54 @@ export class TrafficSim {
       if (!car.dead) car._updatePos();
     }
 
-    // 4. congestion per edge: the share of present vehicles that are stopped,
-    //    smoothed with a timestep-independent EMA. The previous formula scaled
-    //    the input by 0.02 * 0.05, so a fully jammed edge settled at 0.05 rather
-    //    than 1, and its `(dt * 60)` factor made the result depend on timestep.
+    // S04.5 metrics: one sample per sim second into the bounded window, plus
+    // per-edge queue/flow and trip-time records. Overlay reads never mutate.
+    this._metricsTick(dt);
+    this._congestionTick(dt, net);
+    // cleanup dead
+    for (const [id, car] of this.cars) if (car.dead) this.cars.delete(id);
+  }
+
+  /**
+   * S04.5 sampling: accumulates wall dt into sim seconds; one metrics sample
+   * per sim second. Trip completions record their trip time. Single pass over
+   * cars — no nested re-scan per car.
+   */
+  _metricsTick(dt) {
+    this._metricsAcc += dt;
+    if (this._metricsAcc < 1) return;
+    const whole = Math.floor(this._metricsAcc);
+    this._metricsAcc -= whole;
+    for (let k = 0; k < whole; k++) {
+      const t = Math.floor(this.time);
+      let queued = 0;
+      for (const car of this.cars.values()) {
+        if (!car.dead && car.speed < 0.5) queued++;
+      }
+      this.metrics.sample(t, {
+        active: this.cars.size, queued,
+        cancelled: this.stats.cancelled, throughput: this.stats.trips,
+      });
+      for (const e of this.net.edges.values()) {
+        this.metrics.recordEdge(e.id, {
+          queue: e._carCount && e._congestion > 0.5 ? Math.round(e._carCount * e._congestion) : 0,
+          flow: e._carCount ?? 0,
+        });
+      }
+    }
+  }
+
+  // 4. congestion per edge: the share of present vehicles that are stopped,
+  //    smoothed with a timestep-independent EMA.
+  _congestionTick(dt, net) {
     for (const e of net.edges.values()) {
       const frac = e._cars ? (e._congAcc / e._cars) : 0;
       const alpha = 1 - Math.exp(-dt / CONGESTION_TAU);
       const current = e._congestion ?? 0;
       e._congestion = clamp(current + (frac - current) * alpha, 0, 1);
-      // Published for vehicle-weighted aggregation in metrics.js. `_cars` is the
-      // per-tick accumulator and is reset below; `_carCount` persists.
       e._carCount = e._cars;
       e._cars = 0;
     }
-
-    // cleanup dead
-    for (const [id, car] of this.cars) if (car.dead) this.cars.delete(id);
   }
 
   // desired speed considering stop lines & intersection priority
@@ -440,12 +489,16 @@ export class TrafficSim {
   }
 
   /**
-   * Missed the required exit lane: continue legally on the current lane and
-   * replan from the next safe node. Never cut across at the last instant.
+   * Reroute with hysteresis (S04.5.4): at most every 10 sim-seconds per car,
+   * at a safe node (never inside a connector/lane change), only when the new
+   * route improves estimated remaining cost by >= 15% or the current route is
+   * invalid. Revision counter prevents oscillation.
    */
-  _rerouteFromNextNode(car) {
+  _maybeReroute(car) {
     const st = car.currentStep();
-    if (!st || car._rerouted) return;
+    if (!st) return;
+    if (car._changing || car._heldConnector) return; // never mid-transition
+    if (this.time - (car._lastReroute ?? -Infinity) < 10) return;
     const edge = this.net.edges.get(st.edgeId);
     if (!edge) return;
     const nextNode = st.dir === 1 ? edge.b : edge.a;
@@ -454,12 +507,43 @@ export class TrafficSim {
     const fresh = findVehicleRoute(this.net, nextNode, dest, {
       restrictions: this.restrictions ?? null,
     });
-    if (!fresh || !fresh.steps.length) return;
-    // Splice: keep the current edge traversal, continue fresh from next node.
+    if (!fresh || !fresh.steps.length) {
+      this.waitReason.set(car.id, 'noRoute');
+      return;
+    }
+    const remaining = this._remainingTime(car);
+    if (!(fresh.time < remaining * 0.85) && !car._routeInvalid) return;
     car.route.steps = [st, ...fresh.steps];
     car.route.nodes = car.route.nodes.slice(0, car.step + 1).concat(fresh.steps.map(s => s.to));
-    car._rerouted = true;
+    car._lastReroute = this.time;
+    car._revision = (car._revision ?? 0) + 1;
+    car._routeInvalid = false;
     this.waitReason.delete(car.id);
+  }
+
+  /** Estimated remaining travel time on the current route. */
+  _remainingTime(car) {
+    let t = 0;
+    for (let i = car.step; i < car.route.steps.length; i++) {
+      const s = car.route.steps[i];
+      const e = this.net.edges.get(s.edgeId);
+      if (!e) return Infinity;
+      const done = i === car.step ? car.s : 0;
+      t += Math.max(0, e.total - done) / 18;
+    }
+    return t;
+  }
+
+  /**
+   * Missed the required exit lane: continue legally on the current lane and
+   * replan from the next safe node. Never cut across at the last instant.
+   */
+  _rerouteFromNextNode(car) {
+    // Missed exit lane: mark invalid so _maybeReroute takes it even without
+    // the 15% improvement (the current lane cannot serve the connector).
+    car._routeInvalid = true;
+    this._maybeReroute(car);
+    car._routeInvalid = false;
   }
 
   // Returns null if free (no stop needed), or stop distance.
