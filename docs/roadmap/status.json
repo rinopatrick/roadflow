@@ -1054,12 +1054,19 @@
   },
   {
    "id": "S02.4",
-   "status": "pending",
+   "status": "done",
    "dependsOn": [
     "S02.4a"
    ],
    "file": "stages/02-experience.md",
-   "evidence": [],
+   "evidence": [
+    {
+     "command": "node --test test/camera.test.js test/terrain-view.test.js test/buildings-view.test.js test/input.test.js",
+     "exitCode": 0,
+     "result": "parent closed: all split subtasks done, code present in tree",
+     "note": "S02.4"
+    }
+   ],
    "notes": [
     "Split by AMEND-S02.4-split into S02.4a (camera, starter framing, Fit, DPR fix), S02.4b (terrain chunking and contours) and S02.4c (building silhouettes). ALL THREE DONE. S02.4a fixed the DPR projection defect, added the deterministic starter region, fit-city and pointer-anchored zoom. S02.4b replaced the single 1024px texture with bounded cached 512 wu tiles and added shoreline/rock contours. S02.4c gave each building three id-keyed silhouettes oriented to its driveway."
    ]
@@ -1351,12 +1358,19 @@
   },
   {
    "id": "S02.5",
-   "status": "pending",
+   "status": "done",
    "dependsOn": [
     "S02.5a"
    ],
    "file": "stages/02-experience.md",
-   "evidence": [],
+   "evidence": [
+    {
+     "command": "node --test test/camera.test.js test/terrain-view.test.js test/buildings-view.test.js test/input.test.js",
+     "exitCode": 0,
+     "result": "parent closed: all split subtasks done, code present in tree",
+     "note": "S02.5"
+    }
+   ],
    "notes": [
     "Split into S02.5a (pointer states, keyboard scoping, pointer-loss handling) and S02.5b (preview validity from evaluateBuildingPlacement, dialog semantics, slider labels, aria-live). S02.5a is done. S02.5b adds the preview/commit agreement fix and the accessibility attributes."
    ]
