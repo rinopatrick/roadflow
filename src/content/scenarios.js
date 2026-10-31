@@ -160,7 +160,43 @@ export function noisyShortcut() {
   };
 }
 
+/** 7. Night incident: lane closure on the artery, detour holds service. */
+export function nightIncident() {
+  const world = baseWorld(77);
+  road(world, [[-300, 0], [300, 0]], 'avenue');
+  road(world, [[-300, 120], [300, 120]], 'street');
+  world.eco.place('house', -200, 50);
+  world.eco.place('house', 200, 50);
+  world.eco.place('shop', 0, -100);
+  return {
+    id: 'night-incident', version: SCENARIO_VERSION, title: 'Night Incident',
+    seed: 77, initialSnapshot: snap(world), restrictions: {},
+    objectives: [{ metric: 'served', op: '>=', target: 3, windowSeconds: 60 }],
+    events: [{ at: 60, kind: 'demand-surge', payload: { count: 2 } }],
+    hints: ['Close one lane, keep the parallel road flowing'],
+    solution: [],
+  };
+}
+
+/** 8. Bus line: walk-transit-walk carries the corridor. */
+export function busLine() {
+  const world = baseWorld(88);
+  road(world, [[-400, 0], [400, 0]], 'avenue');
+  world.eco.place('house', -250, 50);
+  world.eco.place('house', 250, 50);
+  world.eco.place('factory', 0, -120);
+  return {
+    id: 'bus-line', version: SCENARIO_VERSION, title: 'Bus Line',
+    seed: 88, initialSnapshot: snap(world), restrictions: {},
+    objectives: [{ metric: 'served', op: '>=', target: 4, windowSeconds: 60 }],
+    events: [],
+    hints: ['Stops on local roads; headway 60-120s'],
+    solution: [],
+  };
+}
+
 export const SCENARIOS = [
   firstConnection, congestedT, freightBottleneck,
   twoRiverbanks, signalCorridor, noisyShortcut,
+  nightIncident, busLine,
 ];

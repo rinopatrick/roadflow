@@ -8,11 +8,11 @@ import {
 } from '../src/content/scenarios.js';
 
 describe('S07.1 scenario fixtures', () => {
-  it('all six validate against the schema', () => {
+  it('all eight validate against the schema', () => {
     const made = SCENARIOS.map(fn => fn());
-    assert.equal(made.length, 6);
+    assert.equal(made.length, 8);
     const ids = made.map(s => s.id);
-    assert.equal(new Set(ids).size, 6, 'distinct ids');
+    assert.equal(new Set(ids).size, 8, 'distinct ids');
     for (const s of made) {
       const v = validateScenario(s);
       assert.equal(v.ok, true, `${s.id}: ${v.reason}`);
