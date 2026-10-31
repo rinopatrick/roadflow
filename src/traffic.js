@@ -215,10 +215,16 @@ export class TrafficSim {
     const step = car.currentStep();
     const edge = this.net.edges.get(step.edgeId);
     if (!edge) return true;
-    for (const other of this.cars.values()) {
+    // S08.1: same-lane lookup instead of a full scan (spawn is per-car).
+    const laneKey = `${step.edgeId}:${step.dir}:${step.lane ?? 0}`;
+    const sameLane = this._tickIndex?.byLane.get(laneKey);
+    const pool = sameLane ?? this.cars.values();
+    for (const other of pool) {
       if (other.step >= car.route.steps.length) continue;
       const os = other.currentStep();
-      if (os && os.edgeId === step.edgeId && os.dir === step.dir && Math.abs(other.s - car.s) < Math.max(other.length, car.length) + MIN_GAP) return true;
+      if (sameLane) {
+        if (Math.abs(other.s - car.s) < Math.max(other.length, car.length) + MIN_GAP) return true;
+      } else if (os && os.edgeId === step.edgeId && os.dir === step.dir && Math.abs(other.s - car.s) < Math.max(other.length, car.length) + MIN_GAP) return true;
     }
     return false;
   }
@@ -230,6 +236,9 @@ export class TrafficSim {
     // reset per-edge congestion accumulation
     for (const e of net.edges.values()) e._congAcc = 0;
 
+    // S08.1: one per-tick index consumed by following, spawn, conflicts
+    // and metrics. No routine re-scans every car inside another car loop.
+    this._indexTick();
     // 1. compute desired speeds / resolve intersections
     const intents = new Map(); // carId -> desired speed
     for (const car of this.cars.values()) {
@@ -414,6 +423,26 @@ export class TrafficSim {
   // stable order (signal permission, existing holder, waiting-age, arrival,
   // vehicle id). A car may only enter when its connector and every conflicting
   // connector are free AND downstream has room. Release after the rear clears.
+  /**
+   * S08.1 per-tick index: laneKey -> cars, nodeId -> approaching cars.
+   * Built once; yield/conflict readers use it instead of full scans.
+   */
+  _indexTick() {
+    const byLane = new Map();
+    const byNode = new Map(); // to-nodeId -> cars approaching it
+    for (const car of this.cars.values()) {
+      if (car.dead) continue;
+      const st = car.currentStep();
+      if (!st) continue;
+      const lk = `${st.edgeId}:${st.dir}:${st.lane}`;
+      if (!byLane.has(lk)) byLane.set(lk, []);
+      byLane.get(lk).push(car);
+      if (!byNode.has(st.to)) byNode.set(st.to, []);
+      byNode.get(st.to).push(car);
+    }
+    this._tickIndex = { byLane, byNode };
+  }
+
   _connectorGate(car, edge, node, nextStep) {
     const st = car.currentStep();
     const cid = st?.connectorId;
@@ -428,9 +457,18 @@ export class TrafficSim {
       this.waitReason.set(car.id, 'connectorConflict');
       return Math.min(distToEnd, 6);
     }
-    const conns = buildJunctionConnectors(this.net, node.id, {
-      restrictions: this.restrictions ?? null,
-    });
+    // S08.1: cache connectors per node (+restrictions key, +net version).
+    // Rebuilding swept geometry per car per tick dominated the profile.
+    const rkey = this.restrictions === '*' ? '*' : this.restrictions instanceof Set ? [...this.restrictions].sort().join(',') : '';
+    const ckey = `${node.id}|${rkey}|${this.net.version}`;
+    let conns = this._connCache?.get(ckey);
+    if (!conns) {
+      conns = buildJunctionConnectors(this.net, node.id, {
+        restrictions: this.restrictions ?? null,
+      });
+      if (!this._connCache || this._connCache.size > 500) this._connCache = new Map();
+      this._connCache.set(ckey, conns);
+    }
     const me = conns.find(c => c.id === cid);
     if (!me) {
       this.waitReason.set(car.id, 'noRoute');
@@ -444,10 +482,20 @@ export class TrafficSim {
       }
     }
     // Downstream room: vehicle length + gap must fit at the exit lane start.
+    // S08.1: lane-index lookup instead of a full scan.
     const nEdge = this.net.edges.get(nextStep.edgeId);
     if (nEdge) {
-      for (const other of this.cars.values()) {
+      const laneKey = `${nEdge.id}:${nextStep.dir}:${nextStep.lane}`;
+      const lanePool = this._tickIndex ? (this._tickIndex.byLane.get(laneKey) ?? []) : this.cars.values();
+      for (const other of lanePool) {
         if (other === car || other.dead) continue;
+        if (this._tickIndex) {
+          if (other.s < other.length + MIN_GAP + 3 && other.speed < 1) {
+            this.waitReason.set(car.id, 'downstreamBlocked');
+            return Math.min(distToEnd, 6);
+          }
+          continue;
+        }
         const os = other.currentStep();
         if (!os || os.edgeId !== nEdge.id || os.dir !== nextStep.dir || os.lane !== nextStep.lane) continue;
         if (other.s < other.length + MIN_GAP + 3 && other.speed < 1) {
@@ -575,8 +623,12 @@ export class TrafficSim {
     }
     const remaining = this._remainingTime(car);
     if (!(fresh.time < remaining * 0.85) && !car._routeInvalid) return;
+    // The splice keeps the CURRENT edge traversal at index 0: reset step,
+    // otherwise the old index points past the end of the shorter array and
+    // currentStep() returns undefined (S08.1 crash under reroute load).
     car.route.steps = [st, ...fresh.steps];
     car.route.nodes = car.route.nodes.slice(0, car.step + 1).concat(fresh.steps.map(s => s.to));
+    car.step = 0;
     car._lastReroute = this.time;
     car._revision = (car._revision ?? 0) + 1;
     car._routeInvalid = false;
@@ -621,8 +673,14 @@ export class TrafficSim {
     if (nextStep && node.edges.size > 1 && distToEnd < 50) {
       const nEdge = net.edges.get(nextStep.edgeId);
       if (nEdge) {
-        for (const other of this.cars.values()) {
+        const laneKey = `${nEdge.id}:${nextStep.dir}:${nextStep.lane}`;
+        const pool2 = this._tickIndex ? (this._tickIndex.byLane.get(laneKey) ?? []) : this.cars.values();
+        for (const other of pool2) {
           if (other === car || other.dead) continue;
+          if (this._tickIndex) {
+            if (other.s < other.length + MIN_GAP + 3 && other.speed < 1) return Math.min(distToEnd, 6);
+            continue;
+          }
           const os = other.currentStep();
           if (!os || os.edgeId !== nEdge.id || os.dir !== nextStep.dir || os.lane !== nextStep.lane) continue;
           if (other.s < other.length + MIN_GAP + 3 && other.speed < 1) return Math.min(distToEnd, 6);
@@ -636,7 +694,9 @@ export class TrafficSim {
       if (edge.ring) return null; // circulating: ring traffic has priority
       const ringEdge = net.edges.get(nextStep.edgeId);
       if (ringEdge?.ring) {
-        for (const other of this.cars.values()) {
+        // S08.1: only cars heading for this node can conflict the merge.
+        const ringPool = this._tickIndex ? (this._tickIndex.byNode.get(node.id) ?? []) : this.cars.values();
+        for (const other of ringPool) {
           if (other === car || other.dead) continue;
           const os = other.currentStep();
           if (!os) continue;
@@ -698,8 +758,11 @@ export class TrafficSim {
     // cars on a two-way road wait for each other forever, because at a corner
     // the two edges have different axes so _crosses() is always true.
     if (node.edges.size <= 2) return null;
-    // occupied intersection zone check
-    for (const other of this.cars.values()) {
+    // occupied intersection zone check (S08.1: node-indexed, not a full
+    // scan; falls back to a full scan when no tick index exists, e.g. a
+    // direct _mustYield call outside update()).
+    const nodePool = this._tickIndex ? (this._tickIndex.byNode.get(node.id) ?? []) : this.cars.values();
+    for (const other of nodePool) {
       if (other === car || other.dead) continue;
       const os = other.currentStep();
       if (!os) continue;
@@ -724,7 +787,7 @@ export class TrafficSim {
       // a car coming from our right has rel ≈ 3π/2 (i.e., -π/2)
       const fromRight = Math.abs(rel - Math.PI * 1.5) < 0.5;
       if (!fromRight) continue;
-      for (const other of this.cars.values()) {
+      for (const other of nodePool) {
         if (other === car || other.dead) continue;
         const os = other.currentStep();
         if (!os || os.edgeId !== eid || os.to !== node.id) continue;
