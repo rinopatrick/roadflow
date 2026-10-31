@@ -24,6 +24,59 @@ import {
   validateTunnel as validateTunnelCmd,
 } from './constructionEdits.js';
 import { dist } from './core.js';
+import { applyTransaction as applyBudgetTx, roadCost, flatCost } from './budget.js';
+
+/**
+ * S07.4 construction cost from committed state. Added edges priced by
+ * actual geometry (length × class × grade); flat fees by command kind;
+ * demolition refunds 50% of the same estimate (recorded principal).
+ * Positive = debit, negative = refund, 0 = free (signals, moves, programs).
+ */
+function commandCost(kind, working, change, beforeData = null) {
+  let debit = 0;
+  for (const id of change.addedEdgeIds) {
+    const e = working.net.edges.get(id);
+    if (!e) continue;
+    const grade = e.grade?.kind ?? 'ground';
+    try {
+      debit += roadCost(e.cls, e.total, grade);
+    } catch { /* unknown class: invariant check already refused */ }
+  }
+  const flats = {
+    setSignal: 50, setSignalProgram: 50,
+    makeRoundabout: 80,
+    placeBuilding: 0, // buildings come from earned batch, not credits
+  };
+  if (flats[kind] !== undefined) debit += flats[kind];
+  if (kind === 'placeBuilding') {
+    const b = [...working.eco.buildings.values()].pop();
+    if (b?.type === 'depot') debit += flatCost('depot');
+  }
+  if (kind === 'removeRoad' || kind === 'removeBuilding' || kind === 'removeNode' || kind === 'removeRoundabout') {
+    // Refund 50% of the recorded principal: re-price the REMOVED edges from
+    // the before-snapshot with the same roadCost function (no re-estimate).
+    let principal = 0;
+    const beforeEdges = new Map((beforeData?.net?.edges ?? []).map(e => [e.id, e]));
+    for (const id of change.removedEdgeIds) {
+      const e = beforeEdges.get(id);
+      if (!e) continue;
+      try {
+        principal += roadCost(e.cls, polylineLength(e), e.grade?.kind ?? 'ground');
+      } catch { /* ignore */ }
+    }
+    return -Math.floor(principal * 0.5);
+  }
+  return debit;
+}
+
+function polylineLength(e) {
+  const pts = e.pts ?? [];
+  let n = 0;
+  for (let i = 1; i < pts.length; i++) {
+    n += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  }
+  return n;
+}
 
 function lerp2(a, b, t) {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -754,11 +807,30 @@ export function applyWorldCommand(world, command, { beforeData } = {}) {
   const problem = checkWorldInvariants(working);
   if (problem) return { ok: false, reason: `command produced an invalid world: ${problem}`, world };
 
+  // S07.4: budget debit happens here, once, from the COMMITTED geometry diff
+  // (added edges × roadCost) plus flat fees by command kind — never from
+  // unsnapped preview points. Failed commands already returned above, so
+  // failed validation debits zero by construction. Demolition refunds 50%
+  // of estimated principal (recorded-cost tracking lives in the change).
   const afterData = serializeWorld(working);
+  const change = computeChange(before, afterData);
+  const cost = commandCost(kind, working, change, before);
+  if (cost > 0) {
+    const budget = working.settings?.budget ?? { unlimited: true, credits: 0 };
+    const tx = applyBudgetTx(budget, cost, kind);
+    if (!tx.ok) return { ok: false, reason: tx.reason, world };
+    working.settings = { ...working.settings, budget: { unlimited: !!budget.unlimited, credits: tx.credits } };
+  } else if (cost < 0) {
+    const budget = working.settings?.budget ?? { unlimited: true, credits: 0 };
+    if (!budget.unlimited) {
+      working.settings = { ...working.settings, budget: { unlimited: false, credits: budget.credits - cost } };
+    }
+  }
+  const finalData = cost !== 0 ? serializeWorld(working) : afterData;
   return {
     ok: true,
     world: working,
-    change: computeChange(before, afterData),
+    change: computeChange(before, finalData),
     warnings: result.warnings ?? [],
   };
 }

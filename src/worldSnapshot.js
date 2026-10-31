@@ -104,7 +104,13 @@ export function serializeWorld(world) {
     },
     ids: { next: ids.getState() },
     camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
-    settings: { speed: settings?.speed ?? 1, audio: settings?.audio ?? true },
+    // S07.4 budget rides settings: opt-in credits, default unlimited sandbox.
+    settings: {
+      speed: settings?.speed ?? 1,
+      audio: settings?.audio ?? true,
+      difficulty: settings?.difficulty ?? 'normal',
+      budget: settings?.budget ?? { unlimited: true, credits: 0 },
+    },
     // S07.1 scenario state rides extensions: active scenario id, applied
     // event ledger (array form), granted reward ids. v6; older saves
     // default to no active scenario.
@@ -344,6 +350,13 @@ function normalise(data, version, seed, warnings) {
       audio: typeof data.settings?.audio === 'boolean' ? data.settings.audio : true,
       // S06.5: unknown difficulty values fall back to normal explicitly.
       difficulty: ['easy', 'normal', 'hard'].includes(data.settings?.difficulty) ? data.settings.difficulty : 'normal',
+      // S07.4: budget shape validated; garbage falls back to unlimited.
+      budget: data.settings?.budget && typeof data.settings.budget === 'object'
+        ? {
+          unlimited: data.settings.budget.unlimited !== false,
+          credits: Number.isInteger(data.settings.budget.credits) && data.settings.budget.credits >= 0 ? data.settings.budget.credits : 0,
+        }
+        : { unlimited: true, credits: 0 },
     },
     extensions: isObject(data.extensions) ? data.extensions : {},
   };
