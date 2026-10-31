@@ -127,7 +127,7 @@ describe('S06.1 demand integration', () => {
     const data = serializeWorld(world);
     const v = validateSnapshot(JSON.parse(JSON.stringify(data)));
     assert.equal(v.ok, true, JSON.stringify(v.errors));
-    assert.equal(v.data.v, 5);
+    assert.equal(v.data.v, 6);
     const live = hydrateWorld(v.data);
     for (const b of live.eco.buildings.values()) {
       assert.ok(Number.isInteger(b.assignedWorkers), `${b.id} has worker count`);

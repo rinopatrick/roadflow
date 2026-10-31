@@ -107,7 +107,7 @@ describe('S05.1 integration', () => {
     const data = serializeWorld(world);
     const v = validateSnapshot(JSON.parse(JSON.stringify(data)));
     assert.equal(v.ok, true, JSON.stringify(v.errors));
-    assert.equal(v.data.v, 5);
+    assert.equal(v.data.v, 6);
     const live = hydrateWorld(v.data);
     const le2 = live.net.edges.get(e2.id);
     assert.deepEqual(le2.grade, { kind: 'bridge', za: 12, zb: 12 });

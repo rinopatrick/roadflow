@@ -6,7 +6,7 @@
  "language": "English",
  "publicationAuthorized": false,
  "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
- "nextTask": "S07.1",
+ "nextTask": "S07.2",
  "followUpsCompleted": [
   {
    "id": "S01.1b",
@@ -2019,12 +2019,19 @@
   },
   {
    "id": "S07.1",
-   "status": "pending",
+   "status": "done",
    "dependsOn": [
     "S06.6"
    ],
    "file": "stages/07-depth.md",
-   "evidence": [],
+   "evidence": [
+    {
+     "command": "node --test test/**/*.test.js",
+     "exitCode": 0,
+     "result": "S07.1 gate: 761 pass",
+     "note": "S07.1"
+    }
+   ],
    "notes": []
   },
   {

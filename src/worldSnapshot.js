@@ -28,8 +28,8 @@ import { Economy } from './economy.js';
 import { TrafficSim, Car, getCarIdCounter, setCarIdCounter } from './traffic.js';
 import { createIdSource, makeRng } from './core.js';
 
-/** Current snapshot schema version. v5 adds building capacity (S06.1). */
-export const SNAPSHOT_VERSION = 5;
+/** Current snapshot schema version. v6 carries scenario state (S07.1). */
+export const SNAPSHOT_VERSION = 6;
 
 /** Oldest version this build can migrate from. */
 export const MIN_SUPPORTED_VERSION = 1;
@@ -105,7 +105,16 @@ export function serializeWorld(world) {
     ids: { next: ids.getState() },
     camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
     settings: { speed: settings?.speed ?? 1, audio: settings?.audio ?? true },
-    extensions: {},
+    // S07.1 scenario state rides extensions: active scenario id, applied
+    // event ledger (array form), granted reward ids. v6; older saves
+    // default to no active scenario.
+    extensions: {
+      scenario: world.scenario ? {
+        id: world.scenario.id,
+        ledger: [...(world.scenario.ledger ?? [])],
+        granted: [...(world.scenario.granted ?? [])],
+      } : undefined,
+    },
   };
 
   return data;
