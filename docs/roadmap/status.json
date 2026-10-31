@@ -6,7 +6,7 @@
  "language": "English",
  "publicationAuthorized": false,
  "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
- "nextTask": "S08.4",
+ "nextTask": "",
  "followUpsCompleted": [
   {
    "id": "S01.1b",
@@ -2189,12 +2189,19 @@
   },
   {
    "id": "S08.4",
-   "status": "pending",
+   "status": "done",
    "dependsOn": [
     "S08.3"
    ],
    "file": "stages/08-release.md",
-   "evidence": [],
+   "evidence": [
+    {
+     "command": "node --test test/**/*.test.js",
+     "exitCode": 0,
+     "result": "S08.4 R4 gate: 830 pass; artifacts/R4/REPORT.md",
+     "note": "S08.4"
+    }
+   ],
    "notes": []
   }
  ],

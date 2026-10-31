@@ -4,11 +4,13 @@
   "description": "A city builder focused on traffic. Original game in the traffic-sim genre.",
   "type": "module",
   "scripts": {
-    "lint": "node scripts/lint.mjs", "test": "node --test \"test/**/*.test.js\"",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --test \"test/**/*.test.js\"",
     "test:browser": "node --test test/browser/smoke.js test/browser/ui.js",
     "test:soak": "node soak.js",
     "test:playtest": "node playtest.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dist": "node scripts/package-browser.js dist"
   },
   "license": "MIT",
   "devDependencies": {
