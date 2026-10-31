@@ -34,4 +34,29 @@ describe('S08.3 packaging', () => {
     assert.equal(OFFLINE_STATUS.shipped, false);
     assert.match(OFFLINE_STATUS.reason, /deferred|not shipped/i);
   });
+
+  it('every module in the main.js import closure is allowlisted', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const ROOT = new URL('../', import.meta.url).pathname;
+    const seen = new Set(['index.html']);
+    const walk = (f) => {
+      if (seen.has(f)) return;
+      seen.add(f);
+      let t;
+      try { t = fs.readFileSync(path.join(ROOT, f), 'utf8'); } catch { return; }
+      const dir = path.posix.dirname(f);
+      for (const m of t.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+        let p = m[1];
+        if (!p.endsWith('.js')) p += '.js';
+        walk(path.posix.normalize(path.posix.join(dir, p)));
+      }
+    };
+    walk('src/main.js');
+    // S08.3 regression: terrain.js was missing from the hand-written list
+    // and the game booted to a blank canvas under the hardened server.
+    const { PACKAGE_ALLOWLIST } = await import('../scripts/package-lib.js');
+    const missing = [...seen].filter(f => f.startsWith('src/') && !PACKAGE_ALLOWLIST.includes(f));
+    assert.deepEqual(missing, [], `import closure must be servable: missing ${missing.join(', ')}`);
+  });
 });

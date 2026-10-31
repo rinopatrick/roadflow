@@ -828,7 +828,7 @@ function escape() {
 // ---------- speed ----------
 function setSpeed(s) {
   speed = s;
-  menu.applySpeed(s);
+  menuCtl?.applySpeed(s);
 }
 
 // ---------- menu and inspector ----------
