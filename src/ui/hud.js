@@ -4,7 +4,10 @@
 // It owns its own refresh throttle, which used to be a `lastHud` variable in
 // main.js that the game loop had to remember to respect.
 import { clamp } from '../core.js';
-import { LEVEL_XP } from '../economy.js';
+import { MILESTONES } from '../economy.js';
+
+// Milestone curve shared with the economy: prev/next thresholds of level N.
+const milestoneXp = (lvl) => (lvl <= 1 ? 0 : MILESTONES[lvl - 2] ?? Infinity);
 import { cityCongestion, formatCongestion } from '../metrics.js';
 
 /** Milliseconds between automatic refreshes. Forced updates ignore it. */
@@ -26,8 +29,8 @@ export function createHud(getState) {
       document.getElementById('hLevel').textContent = eco.level;
 
       // Progress through the current level, from the same XP curve the economy uses.
-      const prev = eco.level > 1 ? LEVEL_XP(eco.level - 1) : 0;
-      const next = LEVEL_XP(eco.level);
+      const prev = milestoneXp(eco.level);
+      const next = MILESTONES[eco.level - 1] ?? (prev + 400);
       document.getElementById('xpfill').style.width =
         clamp((eco.xp - prev) / (next - prev) * 100, 0, 100) + '%';
 

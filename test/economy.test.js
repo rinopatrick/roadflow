@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoadNetwork } from '../src/roadNetwork.js';
-import { Economy, BUILDING_DEFS, LEVEL_XP } from '../src/economy.js';
+import { Economy, BUILDING_DEFS, LEVEL_XP, MILESTONES } from '../src/economy.js';
 import { TrafficSim } from '../src/traffic.js';
 
 const mockTerrain = { isBuildable: () => true };
@@ -62,8 +62,8 @@ test('completed trips grant XP and level up grants batch', () => {
   eco._completeTrip({ id: 1 }, shop.id, house.id);
   assert.ok(eco.xp > 0, 'XP granted');
   assert.equal(eco.totalTrips, 1);
-  // force level up
-  eco.xp = LEVEL_XP(1) + 1;
+  // force level up: first milestone is 100 cumulative XP.
+  eco.xp = MILESTONES[0] + 1;
   const bHouse = eco.batch.house, bShop = eco.batch.shop;
   eco.checkLevelUp();
   assert.equal(eco.level, 2);

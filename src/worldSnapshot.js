@@ -333,6 +333,8 @@ function normalise(data, version, seed, warnings) {
     settings: {
       speed: SETTING_FIELDS.includes('speed') && isFiniteNumber(data.settings?.speed) ? data.settings.speed : 1,
       audio: typeof data.settings?.audio === 'boolean' ? data.settings.audio : true,
+      // S06.5: unknown difficulty values fall back to normal explicitly.
+      difficulty: ['easy', 'normal', 'hard'].includes(data.settings?.difficulty) ? data.settings.difficulty : 'normal',
     },
     extensions: isObject(data.extensions) ? data.extensions : {},
   };

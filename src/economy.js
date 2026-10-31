@@ -18,6 +18,10 @@ export const BUILDING_DEFS = {
   park:    { residents: 0, jobs: 0, size: 18, label: 'Park' },
 };
 
+export { MILESTONES } from './rules.js';
+import { levelForXp, grantFor } from './rules.js';
+
+/** Legacy formula, kept for migrateXp reference only. New code uses MILESTONES. */
 export const LEVEL_XP = (lvl) => 300 * lvl * lvl; // cumulative XP for level `lvl`
 
 /** Seconds to wait before retrying a return whose spawn was blocked. */
@@ -323,13 +327,18 @@ export class Economy {
     // 0.4 mean satisfaction the city banks XP without levelling until
     // conditions improve.
     if (this.environment && this.meanSatisfaction() < 0.4) return;
-    while (this.level < 50 && this.xp >= LEVEL_XP(this.level)) {
+    // S06.5: data-driven milestones. Grants come from the single source
+    // grantFor() so the preview and the inventory can never disagree.
+    const target = levelForXp(this.xp);
+    while (this.level < Math.min(target, 50)) {
       this.level++;
-      // grant batch
-      const lvl = this.level;
-      this.batch.house += Math.min(2 + Math.floor(lvl / 2), 8);
-      this.batch.shop += 1 + (lvl % 3 === 0 ? 1 : 0);
-      this.batch.factory += lvl % 4 === 0 ? 1 : 0;
+      const g = grantFor(this.level);
+      this.batch.house += g.house;
+      this.batch.shop += g.shop;
+      this.batch.factory += g.factory;
+      this.batch.park = (this.batch.park ?? 0) + g.park;
+      this._milestonesSeen = this._milestonesSeen ?? new Set();
+      this._milestonesSeen.add(this.level);
       this.onLevelUp?.(this.level);
     }
   }

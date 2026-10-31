@@ -15,7 +15,7 @@ import {
   assertGraphConsistent, assertVehiclesFinite, assertEconomyConsistent,
 } from './helpers/invariants.js';
 import { RoadNetwork } from '../src/roadNetwork.js';
-import { LEVEL_XP } from '../src/economy.js';
+import { LEVEL_XP, MILESTONES } from '../src/economy.js';
 
 // ---------------------------------------------------------------- fixtures ---
 
@@ -250,9 +250,10 @@ test('exactly one level-up is granted at the XP threshold and never twice', () =
   assert.equal(eco.level, 1, 'starts at level 1');
 
   // Position XP exactly one served trip below the level-2 threshold.
-  const tripReward = 10; // 10 * (1 - 0) with no pollution sources
-  eco.xp = LEVEL_XP(1) - tripReward;
-  assert.ok(eco.xp < LEVEL_XP(1), 'starts below the threshold');
+  // S06.5 milestones: first threshold is 100 cumulative XP.
+  const tripReward = 10;
+  eco.xp = MILESTONES[0] - tripReward;
+  assert.ok(eco.xp < MILESTONES[0], 'starts below the threshold');
 
   // Run the REAL loop until a journey completes. Not a direct _completeTrip call.
   let ticks = 0;
@@ -265,7 +266,7 @@ test('exactly one level-up is granted at the XP threshold and never twice', () =
     ticks++;
   }
   assert.equal(eco.totalTrips, 1, `one journey should complete within ${maxTicks} ticks (ran ${ticks})`);
-  assert.ok(eco.xp >= LEVEL_XP(1), `one reward must reach the threshold: xp=${eco.xp}`);
+  assert.ok(eco.xp >= MILESTONES[0], `one reward must reach the threshold: xp=${eco.xp}`);
 
   // First check grants exactly one level.
   const before = { ...eco.batch };

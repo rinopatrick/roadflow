@@ -15,7 +15,7 @@ import { initTemplatePanel, placeTemplateByName, templateAngleDeg, templateList 
 import { initStartScreen } from './startScreen.js';
 import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
 import { reconcileTrafficAfterEdit } from './access.js';
-import { LEVEL_XP } from './economy.js';
+import { MILESTONES } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
 import { tutorialStep, tutorialWorldSnapshot } from './tutorial.js';
 import { ConstructionCursor, arrowDirection } from './construction.js';
@@ -234,7 +234,7 @@ function pluralOf(type) {
  */
 function depletionMessage(type) {
   const label = BUILDING_DEFS[type]?.label?.toLowerCase() ?? type;
-  const need = LEVEL_XP(eco.level) - eco.xp;
+  const need = (MILESTONES[eco.level - 1] ?? eco.xp) - eco.xp;
   const next = `Level ${eco.level + 1} grants more`;
   return need > 0
     ? `No ${pluralOf(label)} left — ${next} (${Math.max(0, Math.round(need))} XP to go).`
