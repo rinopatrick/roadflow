@@ -81,6 +81,28 @@ export const LAYERS = [
       { key: 'ramp', label: 'portal ramp', tone: 'ramp' },
     ],
   },
+  {
+    // S06.3: Air reads factory production-rate emissions; Noise reads the
+    // traffic-flow grid. Same cached sample as the home inspector.
+    id: 'air',
+    label: 'Air',
+    icon: 'air',
+    dataSource: 'factory production rate, distance decay exp(-d/260)',
+    legend: [
+      { key: 'clean', label: 'clean air', tone: 'reachable' },
+      { key: 'smog', label: 'industrial emissions', tone: 'unreachable' },
+    ],
+  },
+  {
+    id: 'noise',
+    label: 'Noise',
+    icon: 'noise',
+    dataSource: 'traffic flow x vehicle class/speed, 64wu grid, exp(-d/120)',
+    legend: [
+      { key: 'quiet', label: 'quiet', tone: 'reachable' },
+      { key: 'loud', label: 'traffic noise', tone: 'unreachable' },
+    ],
+  },
 ];
 
 export const LAYER_IDS = LAYERS.map(l => l.id);

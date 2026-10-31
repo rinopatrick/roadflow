@@ -30,7 +30,7 @@ function world({ road = [[0, 0], [600, 0]], cls = 'street' } = {}) {
 // ---------- layer declarations ----------
 
 test('every declared layer names a real simulated data source', () => {
-  assert.deepEqual(LAYER_IDS, ['traffic', 'access', 'underground']);
+  assert.deepEqual(LAYER_IDS, ['traffic', 'access', 'underground', 'air', 'noise']);
 
   for (const layer of LAYERS) {
     assert.ok(layer.id && layer.label, `layer ${layer.id} needs an id and a visible label`);
@@ -46,17 +46,18 @@ test('every declared layer names a real simulated data source', () => {
   }
 });
 
-test('no pollution or noise layer exists, because no such field is simulated', () => {
+test('no fake sustainability layer exists beyond the simulated ones', () => {
   // DESIGN section 5: show only fields actually computed by the core. S06.3
-  // owns environment/noise and will bring its own data. This guard exists so a
-  // later change cannot quietly wire a toggle to invented values.
-  for (const forbidden of ['pollution', 'noise', 'environment', 'emissions']) {
+  // owns environment/noise and brings real data (production rates, traffic
+  // grid). This guard exists so a later change cannot quietly wire a toggle
+  // to invented values like a single opaque score.
+  for (const forbidden of ['pollution', 'environment', 'emissions', 'sustainability', 'score']) {
     assert.ok(!LAYER_IDS.includes(forbidden),
       `"${forbidden}" must not be a layer: the simulation has no such field`);
   }
   const sources = LAYERS.map(l => l.dataSource).join(' ');
-  assert.ok(!/pollut|noise|emission/i.test(sources),
-    `no layer may claim a pollution/noise source, got: ${sources}`);
+  assert.ok(!/sustainability|score/i.test(sources),
+    `no layer may claim an opaque score, got: ${sources}`);
 });
 
 // ---------- traffic ----------

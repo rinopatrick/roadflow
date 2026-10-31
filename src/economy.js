@@ -13,6 +13,9 @@ export const BUILDING_DEFS = {
   // S06.2: external depot. Finite-rate raw source; connects to the network
   // like any building but is never a trip destination for commuters.
   depot:   { residents: 0, jobs: 0, size: 30, label: 'Depot' },
+  // S06.3: park. Decorative noise buffer: at most +0.1 satisfaction within
+  // 120wu, never a substitute for jobs or goods.
+  park:    { residents: 0, jobs: 0, size: 18, label: 'Park' },
 };
 
 export const LEVEL_XP = (lvl) => 300 * lvl * lvl; // cumulative XP for level `lvl`
@@ -220,12 +223,30 @@ export class Economy {
     }
   }
 
+  /**
+   * S06.3 satisfaction hook. Set by main.js to an Environment instance.
+   * work/shop access come from reachability; the environment supplies only
+   * the env component. Null = legacy behavior (satisfaction 1).
+   */
+  updateSatisfaction(home) {
+    if (!this.environment) { home.satisfaction = 1; return 1; }
+    const work = home.reach?.workId ? 1 : 0;
+    const shop = home.reach?.shopId ? 1 : 0;
+    const r = this.environment.satisfaction({ id: home.id, x: home.x, y: home.y, work, shop }, this._satDt ?? 1);
+    home.satisfaction = r.value;
+    home.satisfactionDetail = { work: r.work, shop: r.shop, env: r.env, air: r.air, noise: r.noise, park: r.park };
+    return r.value;
+  }
+
   _completeTrip(car, destId, homeId) {
     const dest = this.buildings.get(destId);
     const home = this.buildings.get(homeId);
     if (!dest || !home) return;
-    const pollutionPenalty = 1 - clamp(this.pollutionAt(home.x, home.y) * 0.15, 0, 0.6);
-    const gain = 10 * pollutionPenalty;
+    // S06.3: XP is decoupled from the environment. Low satisfaction slows
+    // city growth via checkLevelUp gating, it does not tax individual trips.
+    // The legacy pollution discount is preserved as a comment, not a rule:
+    // previously `gain = 10 * (1 - clamp(pollution * 0.15, 0, 0.6))`.
+    const gain = 10;
     this.xp += gain;
     this.totalTrips++;
     // Queue the return leg. Only building ids are stored here; they are
@@ -286,7 +307,22 @@ export class Economy {
     }
   }
 
+  /** Mean home satisfaction (1 when no homes or no environment hooked). */
+  meanSatisfaction() {
+    let n = 0, sum = 0;
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'house') continue;
+      n++;
+      sum += b.satisfaction ?? 1;
+    }
+    return n ? sum / n : 1;
+  }
+
   checkLevelUp() {
+    // S06.3: low happiness slows growth, never deletes population. Below
+    // 0.4 mean satisfaction the city banks XP without levelling until
+    // conditions improve.
+    if (this.environment && this.meanSatisfaction() < 0.4) return;
     while (this.level < 50 && this.xp >= LEVEL_XP(this.level)) {
       this.level++;
       // grant batch
