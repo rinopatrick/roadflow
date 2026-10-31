@@ -120,6 +120,14 @@ export function serializeWorld(world) {
         ledger: [...(world.scenario.ledger ?? [])],
         granted: [...(world.scenario.granted ?? [])],
       } : undefined,
+      // S07.5 transit lines ride extensions: id, stops, headway, buses,
+      // queues per stop. Riders are journeys; ownership via line + stop.
+      transit: world.transit ? {
+        lines: (world.transit.lines ?? []).map(l => ({
+          id: l.id, stops: [...l.stops], headway: l.headway, buses: l.buses ?? 1,
+          queues: Object.fromEntries((l.queues instanceof Map ? [...l.queues.entries()] : Object.entries(l.queues ?? {})).map(([s, q]) => [s, [...q]])),
+        })),
+      } : undefined,
     },
   };
 

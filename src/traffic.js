@@ -26,6 +26,8 @@ const MIN_GAP = 2.2;
 export const VEHICLE_TYPES = {
   car: { length: 7, width: 3.6, speedFactor: 1 },
   truck: { length: 12, width: 3.8, speedFactor: 0.8 },
+  // S07.5 bus: full-size envelope, never squeezed into car gaps.
+  bus: { length: 18, width: 4, speedFactor: 0.8 },
 };
 
 let carSeq = 1;
@@ -162,6 +164,28 @@ export class TrafficSim {
     if (this._blockedAtSpawn(car)) return null;
     this.cars.set(car.id, car);
     return car;
+  }
+
+  /**
+   * S07.5: spawn a bus on a transit line. Same legal graph and signals;
+   * options.lineId links the vehicle for load/queue accounting.
+   */
+  spawnBus(fromId, toId, options = {}) {
+    if (this.cars.size > 2600) return null;
+    const laneRoute = findVehicleRoute(this.net, fromId, toId, {
+      restrictions: this.restrictions ?? null,
+    });
+    if (!laneRoute) return null;
+    const steps = laneRoute.steps;
+    const nodes = steps.map(s => s.from).concat(steps.length ? [steps[steps.length - 1].to] : []);
+    const bus = new Car({ nodes, steps }, Math.floor(this.rng() * CAR_COLORS.length), 'bus');
+    bus.net = this.net;
+    bus.originTime = this.time;
+    bus.purpose = 'transit';
+    bus.lineId = options.lineId ?? null;
+    if (this._blockedAtSpawn(bus)) return null;
+    this.cars.set(bus.id, bus);
+    return bus;
   }
 
   /**
