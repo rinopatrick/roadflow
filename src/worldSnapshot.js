@@ -76,7 +76,8 @@ export function serializeWorld(world) {
     savedAt: Date.now(),
     map: {
       seed: terrain.seed,
-      generatorVersion: 1, // terrain is fully derived from the seed
+      generatorVersion: terrain.generatorVersion ?? 1,
+      profile: terrain.profile ?? 'island',
     },
     net: net.toJSON(),
     eco: {
@@ -294,7 +295,9 @@ function normalise(data, version, seed, warnings) {
   const out = {
     v: SNAPSHOT_VERSION,
     savedAt: data.savedAt ?? Date.now(),
-    map: { seed, generatorVersion: data.map?.generatorVersion ?? 1 },
+    // S06.4: v2 profiles ride the snapshot; v1 island has no profile field.
+    // generatorVersion selects the generator, profile its parameters.
+    map: { seed, generatorVersion: data.map?.generatorVersion ?? 1, profile: data.map?.profile ?? 'island' },
     net,
     eco: {
       buildings: ecoBuildings,
@@ -379,7 +382,8 @@ function migrateEdgeV3(e, nodeZ = null) {
  * @returns {{terrain, net, traffic, eco, ids, camera, settings}}
  */
 export function hydrateWorld(data, hooks = {}) {
-  const terrain = new Terrain(data.map.seed);
+  // S06.4: profile rides the snapshot; island default keeps v1 exact.
+  const terrain = new Terrain(data.map.seed, { profile: data.map.profile ?? 'island' });
 
   // Reserve every loaded ID so new construction cannot reissue one.
   const ids = createIdSource(data.ids.next);

@@ -6,7 +6,7 @@
  "language": "English",
  "publicationAuthorized": false,
  "implementationAuthorized": "S00.1 through S02.5b (operator approved each task sequentially; S02.1-S02.4 approved collectively, S02.5a and S02.5b approved individually)",
- "nextTask": "S06.4",
+ "nextTask": "S06.5",
  "followUpsCompleted": [
   {
    "id": "S01.1b",
@@ -1968,12 +1968,19 @@
   },
   {
    "id": "S06.4",
-   "status": "pending",
+   "status": "done",
    "dependsOn": [
     "S06.3"
    ],
    "file": "stages/06-city.md",
-   "evidence": [],
+   "evidence": [
+    {
+     "command": "node --test test/**/*.test.js",
+     "exitCode": 0,
+     "result": "S06.4 gate: 739 pass",
+     "note": "S06.4"
+    }
+   ],
    "notes": []
   },
   {

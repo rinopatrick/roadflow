@@ -82,6 +82,7 @@ export class Renderer {
     // Which analytic overlay is showing is interface state and lives in
     // src/ui/controller.js. It arrives with each draw call as `state.overlay`.
     this._terrainSeed = null;
+    this._terrainKey = null;
     this._dpr = 1;
     // Chunked terrain replaces the single 1024px texture (DESIGN section 4):
     // 512 wu tiles at 256 px base resolution, 2x above DETAIL_ZOOM, bounded
@@ -109,6 +110,7 @@ export class Renderer {
    */
   resetCaches() {
     this._terrainSeed = null;
+    this._terrainKey = null;
     this._islandVersion = -1;
     this._islands = null;
     this._blobs = null;
@@ -171,9 +173,13 @@ export class Renderer {
    * nothing is generated for parts of the map nobody can see.
    */
   buildTerrain(terrain) {
-    if (this._terrainSeed !== terrain.seed) {
+    // S06.4 cache key: seed + profile + generator version. A stale texture
+    // from a previous map can never leak into a freshly loaded one.
+    const key = `${terrain.seed}:${terrain.profile ?? 'island'}:${terrain.generatorVersion ?? 1}`;
+    if (this._terrainKey !== key) {
       this._blobs = decorativePatches(terrain);
       this._terrainSeed = terrain.seed;
+      this._terrainKey = key;
       this._tiles.clear();
     }
   }
@@ -217,7 +223,7 @@ export class Renderer {
     const { ctx, canvas } = this;
     const { net, traffic, eco, terrain, preview } = state;
     this._net = net;
-    if (this._terrainSeed !== terrain.seed) this.buildTerrain(terrain);
+    if (this._terrainKey !== `${terrain.seed}:${terrain.profile ?? 'island'}:${terrain.generatorVersion ?? 1}`) this.buildTerrain(terrain);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = PALETTE.water2;
