@@ -282,6 +282,13 @@ function normalise(data, version, seed, warnings) {
     serviceSlots: Number.isInteger(b.serviceSlots)
       ? b.serviceSlots
       : b.type === 'shop' ? 4 : 0,
+    // S06.2 stock: depot starts full, others empty. Validated shape only;
+    // negative or non-finite stock is clamped to 0, never trusted.
+    stock: {
+      raw: Math.max(0, Number.isFinite(b.stock?.raw) ? b.stock.raw
+        : b.type === 'depot' ? 40 : 0),
+      goods: Math.max(0, Number.isFinite(b.stock?.goods) ? b.stock.goods : 0),
+    },
   }));
   if (version < 5) warnings.push('migrated building capacity to v5 (defaults)');
   const out = {
@@ -293,7 +300,16 @@ function normalise(data, version, seed, warnings) {
       buildings: ecoBuildings,
       xp: isFiniteNumber(data.eco.xp) ? data.eco.xp : 0,
       level: Number.isInteger(data.eco.level) ? data.eco.level : 1,
-      batch: isObject(data.eco.batch) ? data.eco.batch : { house: 4, shop: 2, factory: 1 },
+      // S06.2 migrated cities get one available depot plus a notice, so old
+      // saves never deadlock waiting for freight that cannot be built.
+      batch: (() => {
+        const b = isObject(data.eco.batch) ? { ...data.eco.batch } : { house: 4, shop: 2, factory: 1 };
+        if (version < 5 && !(b.depot >= 1)) {
+          b.depot = (b.depot ?? 0) + 1;
+          warnings.push('granted one depot: freight needs a raw source');
+        }
+        return b;
+      })(),
       totalTrips: Number.isInteger(data.eco.totalTrips) ? data.eco.totalTrips : 0,
       pendingReturns: Array.isArray(data.eco.pendingReturns) ? data.eco.pendingReturns : [],
       cancelledReturns: Number.isInteger(data.eco.cancelledReturns) ? data.eco.cancelledReturns : 0,

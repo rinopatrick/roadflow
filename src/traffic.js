@@ -17,9 +17,16 @@ export const CONGESTION_TAU = 5;
 
 export const CAR_COLORS = ['#d94f4f', '#4f7bd9', '#4fae59', '#d9a44f', '#8f5bd9', '#4fb8c9', '#d94f8a', '#8a9299', '#3c4148', '#c9d14f'];
 
-const CAR_LEN = 7;
-const CAR_W = 3.6;
+export const CAR_LEN = 7;
+export const CAR_W = 3.6;
 const MIN_GAP = 2.2;
+
+/** Vehicle types (S06.2). Dimensions drive following, spawn clearance,
+ *  connector sweep and rendering — every assumption reads these, not literals. */
+export const VEHICLE_TYPES = {
+  car: { length: 7, width: 3.6, speedFactor: 1 },
+  truck: { length: 12, width: 3.8, speedFactor: 0.8 },
+};
 
 let carSeq = 1;
 
@@ -42,7 +49,7 @@ export function setCarIdCounter(value) {
 }
 
 export class Car {
-  constructor(route, colorIdx) {
+  constructor(route, colorIdx, kind = 'car') {
     this.id = carSeq++;    this.route = route;             // {steps:[{edgeId,from,to,dir}], nodes}
     this.step = 0;                  // index into route.steps
     this.s = 0;                     // arc pos along current edge (in travel direction)
@@ -51,12 +58,16 @@ export class Car {
     this.waiting = 0;               // seconds spent stopped
     this.dead = false;
     this.x = 0; this.y = 0; this.dir = 0;
-    // Deterministic baseline. Per-vehicle variation belongs to vehicle types
-    // (S06.2), not to a random field that nothing reads.
-    this.speedFactor = 1;
+    // S06.2 vehicle type: dimensions + speed factor come from the type
+    // record, never from literals scattered through the sim.
+    this.kind = kind;
+    this.speedFactor = VEHICLE_TYPES[kind]?.speedFactor ?? 1;
     this.tripTimer = 0;
     this._updatePos();
   }
+
+  get length() { return VEHICLE_TYPES[this.kind]?.length ?? CAR_LEN; }
+  get width() { return VEHICLE_TYPES[this.kind]?.width ?? CAR_W; }
 
   currentStep() { return this.route.steps[this.step]; }
 
@@ -153,6 +164,29 @@ export class TrafficSim {
     return car;
   }
 
+  /**
+   * S06.2: spawn a truck for a freight shipment. Uses the same legal route
+   * graph and signals; only the vehicle type differs. options.shipmentId
+   * links the vehicle so delivery commits on arrival.
+   */
+  spawnFreight(fromId, toId, options = {}) {
+    if (this.cars.size > 2600) return null;
+    const laneRoute = findVehicleRoute(this.net, fromId, toId, {
+      restrictions: this.restrictions ?? null,
+    });
+    if (!laneRoute) return null;
+    const steps = laneRoute.steps;
+    const nodes = steps.map(s => s.from).concat(steps.length ? [steps[steps.length - 1].to] : []);
+    const truck = new Car({ nodes, steps }, Math.floor(this.rng() * CAR_COLORS.length), 'truck');
+    truck.net = this.net;
+    truck.originTime = this.time;
+    truck.purpose = 'freight';
+    truck.shipmentId = options.shipmentId ?? null;
+    if (this._blockedAtSpawn(truck)) return null;
+    this.cars.set(truck.id, truck);
+    return truck;
+  }
+
   _blockedAtSpawn(car) {
     const step = car.currentStep();
     const edge = this.net.edges.get(step.edgeId);
@@ -160,7 +194,7 @@ export class TrafficSim {
     for (const other of this.cars.values()) {
       if (other.step >= car.route.steps.length) continue;
       const os = other.currentStep();
-      if (os && os.edgeId === step.edgeId && os.dir === step.dir && Math.abs(other.s - car.s) < CAR_LEN + MIN_GAP) return true;
+      if (os && os.edgeId === step.edgeId && os.dir === step.dir && Math.abs(other.s - car.s) < Math.max(other.length, car.length) + MIN_GAP) return true;
     }
     return false;
   }
@@ -212,7 +246,7 @@ export class TrafficSim {
         const next = list[i + 1]; // ahead in same lane
         let desired = intents.get(car.id);
         if (next) {
-          const gap = next.s - car.s - CAR_LEN;
+          const gap = next.s - car.s - next.length;
           const follow = this._followSpeed(car.speed, Math.max(gap, 0), next.speed);
           if (follow < desired - 1e-9 && car.speed < 0.5) {
             // The controlling branch is the leader ahead, not a signal.
@@ -252,8 +286,11 @@ export class TrafficSim {
         if (car.s < edge.total) break;   // still on this edge
 
         car.s -= edge.total;             // carry the residual distance
-        // S04.2.5: release the connector once the car leaves the edge — the
-        // rear has cleared the conflict zone at the transition.
+        // S04.2.5: release the connector once the car leaves the edge.
+        // (S06.2 note: a 12wu truck's rear is still inside the zone for a
+        // moment after transition; the follower gap logic and the truck's
+        // own downstream check bound this window. Holding the reservation
+        // until full rear-clear deadlocked saturated junctions in stress.)
         this._releaseConnector(car);
         car.step++;
 
@@ -329,7 +366,8 @@ export class TrafficSim {
     const st = car.currentStep();
     const edge = net.edges.get(st.edgeId);
     if (!edge) return 0;
-    const { speed } = profileFor(edge);
+    const { speed: limit } = profileFor(edge);
+    const speed = limit * (car.speedFactor ?? 1);
     const distToEnd = edge.total - car.s;
     const nextNode = net.nodes.get(st.to);
     if (!nextNode) return speed;
@@ -388,7 +426,7 @@ export class TrafficSim {
         if (other === car || other.dead) continue;
         const os = other.currentStep();
         if (!os || os.edgeId !== nEdge.id || os.dir !== nextStep.dir || os.lane !== nextStep.lane) continue;
-        if (other.s < CAR_LEN + MIN_GAP + 3 && other.speed < 1) {
+        if (other.s < other.length + MIN_GAP + 3 && other.speed < 1) {
           this.waitReason.set(car.id, 'downstreamBlocked');
           return Math.min(distToEnd, 6);
         }
@@ -563,7 +601,7 @@ export class TrafficSim {
           if (other === car || other.dead) continue;
           const os = other.currentStep();
           if (!os || os.edgeId !== nEdge.id || os.dir !== nextStep.dir || os.lane !== nextStep.lane) continue;
-          if (other.s < CAR_LEN + MIN_GAP + 3 && other.speed < 1) return Math.min(distToEnd, 6);
+          if (other.s < other.length + MIN_GAP + 3 && other.speed < 1) return Math.min(distToEnd, 6);
         }
       }
     }

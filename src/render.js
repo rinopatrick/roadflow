@@ -1045,7 +1045,8 @@ export class Renderer {
     // surface context stays readable. Elevated cars draw with a longer
     // shadow cast toward the ground.
     const shadowScale = style.elevated ? 0.9 : 0.37;
-    const L = 7 * zoom, W = 3.6 * zoom;
+    // S06.2: dimensions come from the vehicle, never from literals.
+    const L = (car.length ?? 7) * zoom, W = (car.width ?? 3.6) * zoom;
     const dark = 'rgba(0,0,0,0.55)';
     ctx.save();
     if (style.ghost) ctx.globalAlpha = 0.45;

@@ -10,6 +10,9 @@ export const BUILDING_DEFS = {
   house:   { residents: 4, jobs: 0, size: 22, label: 'House' },
   shop:    { residents: 0, jobs: 2, size: 26, label: 'Shop' },
   factory: { residents: 0, jobs: 6, size: 34, label: 'Factory' },
+  // S06.2: external depot. Finite-rate raw source; connects to the network
+  // like any building but is never a trip destination for commuters.
+  depot:   { residents: 0, jobs: 0, size: 30, label: 'Depot' },
 };
 
 export const LEVEL_XP = (lvl) => 300 * lvl * lvl; // cumulative XP for level `lvl`
@@ -110,6 +113,9 @@ export class Economy {
       // S06.1: capacity + assignment state, serializable and migrated.
       assignedWorkers: 0,
       serviceSlots: type === 'shop' ? 4 : 0,
+      // S06.2 stock, serializable. Depot starts full of raw; factory and
+      // shop start empty so the first deliveries are visible.
+      stock: type === 'depot' ? { raw: 40, goods: 0 } : { raw: 0, goods: 0 },
       tripTimer: 8 + this.rng() * 30,
       // Cosmetic orientation from the separate cosmetic stream, so the
       // simulation draw sequence is completely unaffected. Drawn from a seeded
