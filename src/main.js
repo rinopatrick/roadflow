@@ -13,7 +13,8 @@ import { saveGame, loadGame, hasSave, hasRecoverableBackup, recoverFromBackup, a
 import { menuHandlers, bindToolbarButtons } from './menuBindings.js';
 import { initTemplatePanel, placeTemplateByName, templateAngleDeg, templateList } from './templatePanel.js';
 import { initStartScreen } from './startScreen.js';
-import { sfx, setAudioEnabled, audioEnabled } from './audio.js';
+import { sfx, setAudioEnabled, audioEnabled, setVolumes } from './audio.js';
+import { validateSettings } from './a11y.js';
 import { reconcileTrafficAfterEdit } from './access.js';
 import { MILESTONES } from './economy.js';
 import { boundsOfWorld, fitBounds, starterRegion } from './camera.js';
@@ -97,7 +98,9 @@ function newGame(seed = (() => {
     eco: worldEco,
     ids: worldIds,
     camera: renderer.cam,
-    settings: { speed, audio: audioEnabled() },
+    // S08.2 a11y settings ride settings (persisted separately from saves
+    // by the save layer keying; reset-to-defaults never clears saves).
+    settings: { speed, audio: audioEnabled(), master: 1, sfx: 1, uiScale: 1, reducedMotion: false },
   });
 
   // A fresh map is framed on its starter region, not on the origin: the origin
@@ -857,6 +860,17 @@ function updateTutorial() {
 let menuCtl = null;
 function applyAudio(enabled) {
   setAudioEnabled(enabled);
+  // S08.2: volumes from validated settings; invalid values keep prior mix.
+  const v = validateSettings({
+    master: getWorld()?.settings?.master ?? 1,
+    sfx: getWorld()?.settings?.sfx ?? 1,
+    uiScale: getWorld()?.settings?.uiScale ?? 1,
+  });
+  if (v.ok) {
+    setVolumes(v.settings.master, v.settings.sfx);
+    document.documentElement.style.setProperty('--ui-scale', String(v.settings.uiScale));
+    document.body.classList.toggle('reduced-motion', !!getWorld()?.settings?.reducedMotion);
+  }
   menuCtl?.applySound(enabled);
 }
 

@@ -110,6 +110,11 @@ export function serializeWorld(world) {
       audio: settings?.audio ?? true,
       difficulty: settings?.difficulty ?? 'normal',
       budget: settings?.budget ?? { unlimited: true, credits: 0 },
+      // S08.2: validated a11y fields; garbage falls back to defaults.
+      master: Number.isFinite(settings?.master) ? Math.max(0, Math.min(1, settings.master)) : 1,
+      sfx: Number.isFinite(settings?.sfx) ? Math.max(0, Math.min(1, settings.sfx)) : 1,
+      uiScale: Number.isFinite(settings?.uiScale) ? Math.max(0.9, Math.min(1.5, settings.uiScale)) : 1,
+      reducedMotion: !!settings?.reducedMotion,
     },
     // S07.1 scenario state rides extensions: active scenario id, applied
     // event ledger (array form), granted reward ids. v6; older saves
@@ -365,6 +370,11 @@ function normalise(data, version, seed, warnings) {
           credits: Number.isInteger(data.settings.budget.credits) && data.settings.budget.credits >= 0 ? data.settings.budget.credits : 0,
         }
         : { unlimited: true, credits: 0 },
+      // S08.2: validated a11y fields; garbage falls back to defaults.
+      master: Number.isFinite(data.settings?.master) ? Math.max(0, Math.min(1, data.settings.master)) : 1,
+      sfx: Number.isFinite(data.settings?.sfx) ? Math.max(0, Math.min(1, data.settings.sfx)) : 1,
+      uiScale: Number.isFinite(data.settings?.uiScale) ? Math.max(0.9, Math.min(1.5, data.settings.uiScale)) : 1,
+      reducedMotion: !!data.settings?.reducedMotion,
     },
     extensions: isObject(data.extensions) ? data.extensions : {},
   };
